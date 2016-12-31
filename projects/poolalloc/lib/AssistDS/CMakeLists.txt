@@ -1,4 +1,5 @@
 set(SOURCES
+  DataStructureCallGraph.cpp
   ArgCast.cpp
   ArgSimplify.cpp
   DSNodeEquivs.cpp

@@ -6,6 +6,6 @@ LEVEL=..
 #
 # List all of the subdirectories that we will compile.
 #
-PARALLEL_DIRS=WatchDog
+PARALLEL_DIRS=WatchDog leakplug
 
 include $(LEVEL)/Makefile.common
