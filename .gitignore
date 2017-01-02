@@ -46,6 +46,14 @@ autoconf/autom4te.cache
 projects/*
 !projects/CMakeLists.txt
 !projects/Makefile
+
+!projects/poolalloc
+projects/poolalloc/Debug+Asserts
+projects/poolalloc/lib/AssistDS/Debug+Asserts
+projects/poolalloc/lib/DSA/Debug+Asserts
+projects/poolalloc/tools/WatchDog/Debug+Asserts
+projects/poolalloc/tools/pa/Debug+Asserts
+
 # Clang, which is tracked independently.
 # tools/clang
 # LLDB, which is tracked independently.
