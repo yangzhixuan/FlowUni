@@ -1,0 +1,40 @@
+<html>
+<body>
+<table border=0>
+<tr>
+<td valign=top colspan=3>
+<h2> Site #2: <b><font color=slategray>benign memory leak</font></b> </h2>
+<hr><pre>
+ Site #2   : c1 = (new_char());
+ Function  : "main"
+ Location  : file "double_alloc.c", line 15
+ Details   : Never freed cell, placed in local variable in main
+
+</pre>
+</td>
+</tr>
+<tr><td colspan=3><hr></td></tr><tr><td valign=top><pre>
+       /* File double_alloc.c, line 14 */
+</pre><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;int main()</code><pre>
+<font color="#666666">  14: </font>  {
+<div style='background-color:#f0f0f0;'><b>  15: </b> <b><font color="#FF3030"><b><font color="#FF3030">    char *c1 = new_char();</font></b></font></b></div><font color="#666666">  16: </font>      use(c1);
+<font color="#666666">  17: </font>      c1 = new_char();
+<font color="#666666">  18: </font>      use(c1);
+<font color="#666666">  19: </font>      free(c1);
+<font color="#666666">  20: </font>      return 0;
+<font color="#666666">  21: </font>  }
+
+
+</pre>
+</td><td></td><td valign=top></td>
+</tr>
+<tr><td colspan=3><hr></td></tr>
+<tr><td colspan=3><h3>Additional Information</h3>
+<p> This site is generated from a call to an allocator function.  The function is marked as an allocator because of the following 1 site:
+ <ul>
+ <li> <a href="../freed.cond.leaked/site1.html"> Site #1 </a> 
+
+</ul>
+</td></tr>
+</table></body>
+</html>

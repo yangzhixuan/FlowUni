@@ -54,7 +54,13 @@ projects/poolalloc/lib/DSA/Debug+Asserts
 projects/poolalloc/tools/WatchDog/Debug+Asserts
 projects/poolalloc/tools/pa/Debug+Asserts
 projects/poolalloc/tools/leakplug/Debug+Asserts
-projects/poolalloc/tools/leakplug/tests
+
+projects/poolalloc/tools/leakplug/tests/*.jpg
+projects/poolalloc/tools/leakplug/tests/*.dot
+projects/poolalloc/tools/leakplug/tests/*.bc
+projects/poolalloc/tools/leakplug/tests/*.ll
+projects/poolalloc/tools/leakplug/tests/*.i
+projects/poolalloc/tools/leakplug/tests/spec
 
 # Clang, which is tracked independently.
 # tools/clang

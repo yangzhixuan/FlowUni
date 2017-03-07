@@ -1,0 +1,39 @@
+<html>
+<body>
+<table border=0>
+<tr>
+<td valign=top colspan=3>
+<h2> Site #1: <b><font color=red>memory leak error</font></b> </h2>
+<hr><pre>
+ Site #1   : c = (malloc(1));
+ Function  : "new_char"
+ Location  : file "double_alloc.c", line 6
+ Details   : Allocated cell is freed, but also leaks on some paths
+Leak path 
+    x < 0                          double_alloc.c, line 7
+
+</pre>
+</td>
+</tr>
+<tr><td colspan=3><hr></td></tr><tr><td valign=top><pre>
+       /* File double_alloc.c, line 5 */
+</pre><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;char *new_char()</code><pre>
+<font color="#666666">   5: </font>  {
+<div style='background-color:#f0f0f0;'><b>   6: </b> <b><font color="#FF3030"><b><font color="#FF3030">    char *c = malloc(1);</font></b></font></b></div><div style='background-color:#f0f0f0;'><b>   7:+</b> <b><font color="red">    if(x &lt; 0) {</font></b></div><font color="#666666">   8: </font>          return 0;
+<font color="#666666">   9: </font>      } else {
+<div style='background-color:#f0f0f0;'><b>  10: </b> <b><font color="#30FF30">        return c;</font></b></div><font color="#666666">  11: </font>      }
+<font color="#666666">  12: </font>  }
+
+
+</pre>
+</td><td></td><td valign=top></td>
+</tr>
+<tr><td colspan=3><hr></td></tr>
+<tr><td colspan=3><h3>Additional Information</h3>
+<pre>
+ Before simplification 
+Leak path 
+    x < 0                          double_alloc.c, line 7
+</pre></td></tr>
+</table></body>
+</html>

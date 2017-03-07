@@ -1,0 +1,39 @@
+<html>
+<body>
+<table border=0>
+<tr>
+<td valign=top colspan=3>
+<h2> Site #3: <b><font color=green>no errors</font></b> </h2>
+<hr><pre>
+ Site #3   : c1 = (new_char());
+ Function  : "main"
+ Location  : file "double_alloc.c", line 17
+ Details   : Allocated cell is always freed or returned from allocator function, except when null
+
+</pre>
+</td>
+</tr>
+<tr><td colspan=3><hr></td></tr><tr><td valign=top><pre>
+       /* File double_alloc.c, line 14 */
+</pre><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;int main()</code><pre>
+<font color="#666666">  14: </font>  {
+<font color="#666666">  15: </font>      char *c1 = new_char();
+<font color="#666666">  16: </font>      use(c1);
+<div style='background-color:#f0f0f0;'><b>  17: </b> <b><font color="#FF3030"><b><font color="#FF3030">    c1 = new_char();</font></b></font></b></div><font color="#666666">  18: </font>      use(c1);
+<div style='background-color:#f0f0f0;'><b>  19: </b> <b><font color="#30FF30">    free(c1);</font></b></div><font color="#666666">  20: </font>      return 0;
+<font color="#666666">  21: </font>  }
+
+
+</pre>
+</td><td></td><td valign=top></td>
+</tr>
+<tr><td colspan=3><hr></td></tr>
+<tr><td colspan=3><h3>Additional Information</h3>
+<p> This site is generated from a call to an allocator function.  The function is marked as an allocator because of the following 1 site:
+ <ul>
+ <li> <a href="../freed.cond.leaked/site1.html"> Site #1 </a> 
+
+</ul>
+</td></tr>
+</table></body>
+</html>
