@@ -39,8 +39,14 @@ namespace leakplug{
         M = F->getParent();
         AA = &pass->getAnalysis<AliasAnalysis>();
 #ifdef USEDSA
-        DSA = &pass->getAnalysis<EQTDDataStructures>();
-        DSA->print(errs(), M);
+        // DSA = &pass->getAnalysis<EQTDDataStructures>();
+        // DSA->print(errs(), M);
+        BU_DSA = &pass->getAnalysis<EquivBUDataStructures>();
+        BU_DSA -> print(errs(), M);
+        localDSA = &pass->getAnalysis<StdLibDataStructures>();
+        localDSA->print(errs(), M);
+        mea = &pass->getAnalysis<MemoryEffectAnalysis>();
+        mea->print(errs(), M);
 #endif
 
         // get the malloc() function in the module
@@ -333,8 +339,11 @@ namespace leakplug{
     void LeakPlug::getAnalysisUsage(AnalysisUsage &AU) const {
         AU.setPreservesCFG();
         AU.addRequired<AliasAnalysis>();
-#if USEDSA
+#ifdef USEDSA
         AU.addRequired<EQTDDataStructures>();
+        AU.addRequired<EquivBUDataStructures>();
+        AU.addRequired<StdLibDataStructures>();
+        AU.addRequired<MemoryEffectAnalysis>();
 #endif
     }
 
@@ -458,12 +467,12 @@ namespace leakplug{
         const MDFile* file = fnLoc->getFile();
         errs() << "file name " << file->getFilename() <<"\n";
         errs() << "fn at " << fnLoc.getLine() << ", " << fnLoc.getCol() << "\n";
-        errs() << "Patch before " << loc.getLine() << ", " << loc.getCol() << "\n";
+        errs() << "Patch before " << loc.getLine() << ", " << loc.getCol() << ", "<< *insertBefore<<"\n";
 
         auto varName = string_format("ptr_%d_%d", reLoc.getLine(), reLoc.getCol());
         patches.push_back(Patch{file->getFilename(), fnLoc.getLine() + 1, 1, string_format("void* %s;\n", varName.c_str())});
         patches.push_back(Patch{file->getFilename(), reLoc.getLine(), reLoc.getCol(), string_format("%s = ", varName.c_str())});
-        patches.push_back(Patch{file->getFilename(), loc.getLine(), loc.getCol(), string_format("free(%s);\n", varName.c_str())});
+        patches.push_back(Patch{file->getFilename(), loc.getLine(), 1, string_format("free(%s);\n", varName.c_str())});
 
 #if 0
         // We are not able to find any pointers because current AA doesn't provide MustAlias

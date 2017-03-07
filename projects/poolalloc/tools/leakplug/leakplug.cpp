@@ -37,8 +37,11 @@ InputFilename(cl::Positional, cl::desc("<input bytecode>"), cl::init("-"));
 static cl::opt<std::string>
 OutputFilename("o", cl::desc("Output filename"), cl::value_desc("filename"));
 
+
 int main(int argc, const char *argv[])
 {
+    MemoryEffectAnalysis a;
+    // FIXME: add -disable-dsa-stdlib option by default
     cl::ParseCommandLineOptions(argc, argv, " llvm system compiler\n");
     sys::PrintStackTraceOnErrorSignal();
 
@@ -80,8 +83,9 @@ int main(int argc, const char *argv[])
     Passes.add(new BUDataStructures());
     Passes.add(new CompleteBUDataStructures());
     Passes.add(new EquivBUDataStructures());
-    Passes.add(new TDDataStructures());
-    Passes.add(new EQTDDataStructures());
+    Passes.add(new MemoryEffectAnalysis());
+//    Passes.add(new TDDataStructures());
+//    Passes.add(new EQTDDataStructures());
 #endif
     Passes.add(new leakplug::LeakPlug());
 

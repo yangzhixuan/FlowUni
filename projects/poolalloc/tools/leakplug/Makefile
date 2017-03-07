@@ -14,7 +14,9 @@ TOOLNAME=leakplug
 
 LINK_COMPONENTS :=  bitreader bitwriter instrumentation scalaropts ipo \
                     nativecodegen
-LLVMLIBS := LLVMDataStructure.a
+
+USEDLIBS := LLVMDataStructure.a
+
 
 # Include this here so we can get the configuration of the targets
 # that have been configured for construction. We have to do this

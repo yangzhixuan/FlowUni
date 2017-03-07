@@ -308,8 +308,8 @@ class EquivBUDataStructures : public CompleteBUDataStructures {
 
 public:
   static char ID;
-  EquivBUDataStructures()
-    : CompleteBUDataStructures(ID, "dsa-eq", "eq.") {}
+  EquivBUDataStructures(char & CID = ID, const char* name = "dsa-eq", const char* printname = "eq.")
+    : CompleteBUDataStructures(CID, name, printname) {}
   ~EquivBUDataStructures() { releaseMemory(); }
 
   virtual bool runOnModule(Module &M);
@@ -319,6 +319,25 @@ public:
     AU.setPreservesAll();
   }
 
+};
+
+/// MemoryEffectAnalysis
+class MemoryEffectAnalysis : public EquivBUDataStructures {
+
+public:
+  static char ID;
+  MemoryEffectAnalysis(char & CID = ID, const char* name = "effect", const char* printname = "effect.")
+    : EquivBUDataStructures(ID, name, printname) {}
+  ~MemoryEffectAnalysis() { releaseMemory(); }
+
+  virtual bool runOnModule(Module &M);
+
+  virtual void getAnalysisUsage(AnalysisUsage &AU) const {
+    AU.addRequired<EquivBUDataStructures>();
+    AU.setPreservesAll();
+  }
+private:
+  virtual bool _runOnDSGraph(DSGraph *g);
 };
 
 /// TDDataStructures - Analysis that computes new data structure graphs

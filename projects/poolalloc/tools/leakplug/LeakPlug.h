@@ -13,6 +13,8 @@
 #include "dsa/DataStructure.h"
 #include "dsa/DSCallGraph.h"
 
+#define USEDSA
+
 #include <vector>
 #include <queue>
 #include <set>
@@ -36,6 +38,9 @@ namespace leakplug{
         AliasAnalysis *AA;
 #ifdef USEDSA
         EQTDDataStructures *DSA;
+        EquivBUDataStructures *BU_DSA;
+        StdLibDataStructures *localDSA;
+        MemoryEffectAnalysis *mea;
 #endif
         Value *mallocF;
         Value *freeF;

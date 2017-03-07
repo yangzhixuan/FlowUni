@@ -16,6 +16,7 @@
 #define LLVM_ANALYSIS_DSGRAPH_H
 
 #include "dsa/DSNode.h"
+#include "dsa/DSSupport.h"
 #include "dsa/DSCallGraph.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/IR/Function.h"

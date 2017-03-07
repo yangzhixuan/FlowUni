@@ -1,4 +1,8 @@
 digraph "Globals graph" {
 	label="Globals graph";
 
+	Node0x7ff170c15810 [shape=record,shape=Mrecord,label="{0: i32,  : GMRE\n@x = common global i32 0, align 4\n}"];
+	Node0x7ff170c16c20[ shape=record, label ="{call|{<s0>r|<s1>g}}"];
+	Node0x7ff170c16d20[ shape=record, label ="{call|{<s0>r|<s1>h}}"];
+	Node0x7ff170c16ca0[ shape=record, label ="{call|{<s0>r|<s1>t}}"];
 }
