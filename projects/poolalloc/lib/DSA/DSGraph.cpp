@@ -446,7 +446,7 @@ void DSGraph::mergeInGraph(const DSCallSite &CS,
   // Clone the callee's graph into the current graph, keeping track of where
   // scalars in the old graph _used_ to point, and of the new nodes matching
   // nodes of the old graph.
-  ReachabilityCloner RC(this, &Graph, CloneFlags);
+  ReachabilityCloner RC(this, &Graph, CloneFlags, true, CS.getCallSite());
 
   // Map the return node pointer over.
   if (!CS.getRetVal().isNull())

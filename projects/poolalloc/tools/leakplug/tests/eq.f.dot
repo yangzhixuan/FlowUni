@@ -1,7 +1,0 @@
-digraph "Function f" {
-	label="Function f";
-
-	Node0x7ff170c15c70 [shape=record,shape=Mrecord,label="{0: i32,  : SMR\n}"];
-	Node0x7ff170c0acb8[  label ="  %retval = alloca i32, align 4"];
-	Node0x7ff170c0acb8 -> Node0x7ff170c15c70[arrowtail=tee,color=gray63];
-}

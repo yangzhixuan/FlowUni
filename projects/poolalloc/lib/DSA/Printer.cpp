@@ -82,7 +82,9 @@ static std::string getCaption(const DSNode *N, const DSGraph *G) {
     if (N->isArrayNode())
       OS << " array";
   }
-  if (unsigned NodeType = N->getNodeFlags()) {
+
+  {
+    unsigned NodeType = N->getNodeFlags();
     OS << ": ";
     if (NodeType & DSNode::AllocaNode       ) OS << "S";
     if (NodeType & DSNode::HeapNode         ) OS << "H";
@@ -96,6 +98,9 @@ static std::string getCaption(const DSNode *N, const DSGraph *G) {
     if (NodeType & DSNode::IntToPtrNode     ) OS << "P";
     if (NodeType & DSNode::PtrToIntNode     ) OS << "2";
     if (NodeType & DSNode::VAStartNode      ) OS << "V";
+    if (N->isHeapOnlyNode()                 ) OS << "<HO>";
+    if (NodeType & DSNode::FreedMustNode    ) OS << "<FM>";
+    if (NodeType & DSNode::AllocatedMustNode) OS << "<AM>";
 
 #ifndef NDEBUG
     if (NodeType & DSNode::DeadNode       ) OS << "<dead>";
@@ -214,6 +219,24 @@ struct DOTGraphTraits<const DSGraph*> : public DefaultDOTGraphTraits {
           GW.emitEdge(I->first, -1, DestNode,
                       EdgeDest, "arrowtail=tee,color=gray63");
         }
+    }
+
+
+    // Output MallocSiteSet for HeapOnly nodes
+    for (auto node_ite = G->node_begin(); node_ite != G->node_end(); node_ite++) {
+      if(node_ite->isHeapOnlyNode()){
+        std::string OS_str;
+        llvm::raw_string_ostream OS(OS_str);
+        OS<<"sites: ";
+        for(auto pI : node_ite->getMallocSite()) {
+          pI->print(OS);
+          OS<<"\n";
+        }
+        GW.emitSimpleNode(&(node_ite->getMallocSite()), "", OS.str());
+
+        const DSNode *N = &(*node_ite);
+        GW.emitEdge(N, -1, &(node_ite->getMallocSite()), -1, "");
+      }
     }
 
 

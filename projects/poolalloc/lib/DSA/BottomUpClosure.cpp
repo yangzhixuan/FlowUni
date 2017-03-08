@@ -700,7 +700,7 @@ void BUDataStructures::calculateGraph(DSGraph* Graph) {
       //  idea is that stack objects are invalid if they escape.
       //
       Graph->mergeInGraph(CS, *Callee, *GI,
-                          DSGraph::StripAllocaBit|DSGraph::DontCloneCallNodes);
+                          DSGraph::StripAllocaBit|DSGraph::DontCloneCallNodes|DSGraph::PushUpMallocSite);
       ++NumInlines;
       DEBUG(Graph->AssertGraphOK(););
     }

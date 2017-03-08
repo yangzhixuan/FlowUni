@@ -140,7 +140,7 @@ DSNode::DSNode(DSGraph *G)
 // DSNode copy constructor... do not copy over the referrers list!
 DSNode::DSNode(const DSNode &N, DSGraph *G, bool NullLinks)
   : NumReferrers(0), Size(N.Size), ParentGraph(G), TyMap(N.TyMap),
-  Globals(N.Globals), NodeType(N.NodeType) {
+  Globals(N.Globals), NodeType(N.NodeType), MallocSitesSet(N.MallocSitesSet) {
     if (!NullLinks) Links = N.Links;
     G->addNode(this);
     ++NumNodeAllocated;
@@ -614,7 +614,13 @@ void DSNode::MergeNodes(DSNodeHandle& CurNodeH, DSNodeHandle& NH) {
   assert(!CurNodeH.getNode()->isDeadNode());
 
   // Merge the NodeType information.
-  CurNodeH.getNode()->NodeType |= N->NodeType;
+  CurNodeH.getNode()->NodeType = mergeNodeTy(CurNodeH.getNode()->NodeType, N->NodeType);
+
+  // Merge MallocSitesSet
+  DSNode* CurN = CurNodeH.getNode();
+  for(auto site : N->MallocSitesSet){
+    CurN->addMallocSite(site);
+  }
 
   // Start forwarding to the new node!
   N->forwardNode(CurNodeH.getNode(), NOffset);
@@ -790,6 +796,10 @@ DSNodeHandle ReachabilityCloner::getClonedNH(const DSNodeHandle &SrcNH) {
 
   DSNode *DN = new DSNode(*SN, Dest, true /* Null out all links */);
   DN->maskNodeTypes(BitsToKeep);
+  if(CloneFlags & DSGraph::PushUpMallocSite) {
+    DN->getMallocSite().clear();
+    DN->addMallocSite(newMallocCallSite);
+  }
   NH = DN;
 
   // Next, recursively clone all outgoing links as necessary.  Note that
@@ -933,6 +943,15 @@ void ReachabilityCloner::merge(const DSNodeHandle &NH,
     // Merge the NodeType information.
     DN->mergeNodeFlags(SN->getNodeFlags() & BitsToKeep);
 
+    // Merge MallocCallSite
+    if(CloneFlags & DSGraph::PushUpMallocSite) {
+      DN->addMallocSite(newMallocCallSite);
+    } else {
+      for(const auto& cs : SN->getMallocSite()) {
+        DN->addMallocSite(cs);
+      }
+    }
+
     // Before we start merging outgoing links and updating the scalar map, make
     // sure it is known that this is the representative node for the src node.
     SCNH = DSNodeHandle(DN, NH.getOffset()-SrcNH.getOffset());
@@ -961,6 +980,12 @@ void ReachabilityCloner::merge(const DSNodeHandle &NH,
     // back on being simple.
     DSNode *NewDN = new DSNode(*SN, Dest, true /* Null out all links */);
     NewDN->maskNodeTypes(BitsToKeep);
+
+    NewDN->getMallocSite().clear();
+    if(CloneFlags & DSGraph::PushUpMallocSite) {
+      NewDN->getMallocSite().clear();
+      NewDN->addMallocSite(newMallocCallSite);
+    }
 
 #ifndef NDEBUG
     unsigned NHOffset = NH.getOffset();

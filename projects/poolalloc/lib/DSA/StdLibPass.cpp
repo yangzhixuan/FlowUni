@@ -185,7 +185,10 @@ const struct {
   
   {"strcat",     {NRET_YARGS, YRET_YARGS, NRET_NARGS, YRET_YARGS, true}},
   {"strncat",    {NRET_YARGS, YRET_YARGS, NRET_NARGS, YRET_YARGS, true}},
-  
+
+  // FIXME: add more __str***_chk or direct clang not to generate such functions
+  {"__strcpy_chk",{NRET_YARGS, YRET_YARGS, NRET_NARGS, YRET_YNARGS, true}},
+
   {"strcpy",     {NRET_YARGS, YRET_YARGS, NRET_NARGS, YRET_YARGS, true}},
   {"stpcpy",     {NRET_YARGS, YRET_YARGS, NRET_NARGS, YRET_YARGS, true}},
   {"wcscpy",     {NRET_YARGS, YRET_YARGS, NRET_NARGS, YRET_YARGS, true}},
@@ -695,8 +698,11 @@ void StdLibDataStructures::processFunction(int x, Function *F) {
               Graph->getNodeForValue(CI).getNode()->setReadMarker();
             if (recFuncs[x].action.write[0])
               Graph->getNodeForValue(CI).getNode()->setModifiedMarker();
-            if (recFuncs[x].action.heap[0])
+            if (recFuncs[x].action.heap[0]) {
               Graph->getNodeForValue(CI).getNode()->setHeapMarker();
+              // Graph->getNodeForValue(CI).getNode()->setHeapMustMarker();
+              Graph->getNodeForValue(CI).getNode()->addMallocSite(CI);
+            }
           }
         }
 
@@ -711,8 +717,11 @@ void StdLibDataStructures::processFunction(int x, Function *F) {
                 Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->setReadMarker();
               if (recFuncs[x].action.write[y + 1])
                 Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->setModifiedMarker();
-              if (recFuncs[x].action.heap[y + 1])
+              if (recFuncs[x].action.heap[y + 1]) {
                 Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->setHeapMarker();
+                // Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->setHeapMustMarker();
+                Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->addMallocSite(CI);
+              }
             }
           }
 
@@ -767,8 +776,11 @@ void StdLibDataStructures::processFunction(int x, Function *F) {
               Graph->getNodeForValue(CI).getNode()->setReadMarker();
             if (recFuncs[x].action.write[0])
               Graph->getNodeForValue(CI).getNode()->setModifiedMarker();
-            if (recFuncs[x].action.heap[0])
+            if (recFuncs[x].action.heap[0]) {
               Graph->getNodeForValue(CI).getNode()->setHeapMarker();
+              // Graph->getNodeForValue(CI).getNode()->setHeapMustMarker();
+              Graph->getNodeForValue(CI).getNode()->addMallocSite(CI);
+            }
           }
         }
 
@@ -783,8 +795,11 @@ void StdLibDataStructures::processFunction(int x, Function *F) {
                 Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->setReadMarker();
               if (recFuncs[x].action.write[y + 1])
                 Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->setModifiedMarker();
-              if (recFuncs[x].action.heap[y + 1])
+              if (recFuncs[x].action.heap[y + 1]) {
                 Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->setHeapMarker();
+                // Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->setHeapMustMarker();
+                Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->addMallocSite(CI);
+              }
             }
           }
 
@@ -844,8 +859,11 @@ void StdLibDataStructures::processFunction(int x, Function *F) {
                     Graph->getNodeForValue(CI).getNode()->setReadMarker();
                   if (recFuncs[x].action.write[0])
                     Graph->getNodeForValue(CI).getNode()->setModifiedMarker();
-                  if (recFuncs[x].action.heap[0])
+                  if (recFuncs[x].action.heap[0]) {
                     Graph->getNodeForValue(CI).getNode()->setHeapMarker();
+                    // Graph->getNodeForValue(CI).getNode()->setHeapMustMarker();
+                    Graph->getNodeForValue(CI).getNode()->addMallocSite(CI);
+                  }
                 }
               }
 
@@ -860,8 +878,11 @@ void StdLibDataStructures::processFunction(int x, Function *F) {
                       Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->setReadMarker();
                     if (Graph->hasNodeForValue(CI->getArgOperand(y)))
                       Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->setModifiedMarker();
-                    if (Graph->hasNodeForValue(CI->getArgOperand(y)))
+                    if (Graph->hasNodeForValue(CI->getArgOperand(y))) {
                       Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->setHeapMarker();
+                      // Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->setHeapMustMarker();
+                      Graph->getNodeForValue(CI->getArgOperand(y)).getNode()->addMallocSite(CI);
+                    }
                   }
                 }
 

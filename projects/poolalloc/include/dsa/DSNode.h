@@ -44,7 +44,7 @@ class DSNode : public ilist_node<DSNode> {
 public:
   typedef std::map<unsigned, SuperSet<Type*>::setPtr> TyMapTy;
   typedef std::map<unsigned, DSNodeHandle> LinkMapTy;
-
+  typedef std::set<CallSite> MallocSitesSetTy;
 private:
   friend struct ilist_sentinel_traits<DSNode>;
   //Sentinel
@@ -81,6 +81,11 @@ private:
   ///
   LinkMapTy Links;
 
+  /// MallocSitesSet - For nodes whose represented memory elements are all on the
+  /// heap, pMallocSitesSet contains all corresponding allocation sites in the current
+  /// function. It is used to determine the AllocatedMust flag.
+  MallocSitesSetTy MallocSitesSet;
+
   /// Globals - The list of global values that are merged into this node.
   ///
   svset<const GlobalValue*> Globals;
@@ -115,15 +120,24 @@ public:
     DeadNode        = 1 << 15,   // This node is dead and should not be pointed to
     //#endif
 
+    HeapMustNode = 1 << 16,  // All memory objects in this node was allocated with malloc
+    AllocatedMustNode   = 1 << 17,  // This node must be malloc()ed when returning from the function
+    FreedMustNode       = 1 << 18,  // This node must be free()d when returning from the function
     Composition = AllocaNode | HeapNode | GlobalNode | UnknownNode
   };
+
+  /// Bits representing 'must'-information should be merged with AND
+  static const unsigned MERGE_WITH_AND = HeapMustNode | AllocatedMustNode | FreedMustNode;
+  static unsigned mergeNodeTy(unsigned t1, unsigned t2) {
+    return ((t1 | t2) & ~MERGE_WITH_AND) | ((t1 & t2) & MERGE_WITH_AND);
+  }
 
   /// NodeType - A union of the above bits.  "Shadow" nodes do not add any flags
   /// to the nodes in the data structure graph, so it is possible to have nodes
   /// with a value of 0 for their NodeType.
   ///
 private:
-  unsigned short NodeType;
+  unsigned int NodeType;
 public:
 
   /// DSNode ctor - Create a node of the specified type, inserting it into the
@@ -359,7 +373,7 @@ public:
   }
 
   void mergeNodeFlags(unsigned RHS) {
-    NodeType |= RHS;
+    NodeType = mergeNodeTy(NodeType, RHS);
   }
 
   /// getNodeFlags - Return all of the flags set on the node.  If the DEAD flag
@@ -374,7 +388,7 @@ public:
   bool isAllocaNode()     const { return NodeType & AllocaNode;    }
   bool isHeapNode()       const { return NodeType & HeapNode;      }
   bool isGlobalNode()     const { return NodeType & GlobalNode;    }
-  bool isExternFuncNode() const { return NodeType & ExternFuncNode; }
+  bool isExternFuncNode() const { return NodeType & ExternFuncNode;}
   bool isUnknownNode()    const { return NodeType & UnknownNode;   }
   bool isModifiedNode()   const { return NodeType & ModifiedNode;  }
   bool isReadNode()       const { return NodeType & ReadNode;      }
@@ -387,6 +401,9 @@ public:
   bool isIntToPtrNode()   const { return NodeType & IntToPtrNode;  }
   bool isPtrToIntNode()   const { return NodeType & PtrToIntNode;  }
   bool isVAStartNode()    const { return NodeType & VAStartNode;   }
+
+  bool isHeapOnlyNode()   const { return !(isAllocaNode() || isGlobalNode() || isExternalNode()
+    || isUnknownNode() || isExternalNode() || isIntToPtrNode() || isPtrToIntNode() || isVAStartNode()); }
 
   DSNode* setAllocaMarker()     { NodeType |= AllocaNode;     return this; }
   DSNode* setHeapMarker()       { NodeType |= HeapNode;       return this; }
@@ -446,6 +463,20 @@ public:
   /// checkOffsetFoldIfNeeded - Fold DSNode if the specified offset is
   /// larger than its size, and the node isn't an array or forwarding.
   void checkOffsetFoldIfNeeded(int Offset);
+
+  /// addMallocSite - add a CallSite as a allocation site for the node
+  void addMallocSite(CallSite site) {
+    // assert(isHeapMustNode() && "MallocSiteSet should only be tracked for HeapMustNode");
+    MallocSitesSet.insert(site);
+  }
+
+  MallocSitesSetTy& getMallocSite() {
+    return MallocSitesSet;
+  }
+
+  const MallocSitesSetTy& getMallocSite() const {
+    return MallocSitesSet;
+  }
 private:
   friend class DSNodeHandle;
 

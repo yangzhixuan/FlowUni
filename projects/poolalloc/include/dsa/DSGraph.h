@@ -538,7 +538,8 @@ public:
     DontCloneCallNodes    = 1 << 1, CloneCallNodes    = 0,
     DontCloneAuxCallNodes = 1 << 2, CloneAuxCallNodes = 0,
     StripModRefBits       = 1 << 3, KeepModRefBits    = 0,
-    StripIncompleteBit    = 1 << 4, KeepIncompleteBit = 0
+    StripIncompleteBit    = 1 << 4, KeepIncompleteBit = 0,
+    PushUpMallocSite      = 1 << 5, KeepMallocSite    = 0
   };
 
   void updateFromGlobalGraph();
@@ -641,6 +642,11 @@ class ReachabilityCloner {
   DSGraph* Dest;
   const DSGraph* Src;
 
+  /// pushUpCallSite - When inlining callee graph into caller graph, if PushUpCallSite
+  /// is set, all elements in the MallocCallSite from the callee graph is replaced by
+  /// newMallocCallsite.
+  CallSite newMallocCallSite;
+
   /// BitsToKeep - These bits are retained from the source node when the
   /// source nodes are merged into the destination graph.
   unsigned BitsToKeep;
@@ -657,8 +663,8 @@ class ReachabilityCloner {
 
 public:
   ReachabilityCloner(DSGraph* dest, const DSGraph* src, unsigned cloneFlags,
-                     bool _createDest = true)
-    : Dest(dest), Src(src), CloneFlags(cloneFlags), createDest(_createDest) {
+                     bool _createDest = true, CallSite newCS = CallSite())
+    : Dest(dest), Src(src), CloneFlags(cloneFlags), createDest(_createDest), newMallocCallSite(newCS) {
     assert(Dest != Src && "Cannot clone from graph to same graph!");
     BitsToKeep = ~DSNode::DeadNode;
     if (CloneFlags & DSGraph::StripAllocaBit)
@@ -667,6 +673,9 @@ public:
       BitsToKeep &= ~(DSNode::ModifiedNode | DSNode::ReadNode);
     if (CloneFlags & DSGraph::StripIncompleteBit)
       BitsToKeep &= ~DSNode::IncompleteNode;
+    if (CloneFlags & DSGraph::PushUpMallocSite) {
+      assert(newCS != CallSite() && "newMallocCallSite should be provided to push up MallocCallSite");
+    }
   }
 
   DSNodeHandle getClonedNH(const DSNodeHandle &SrcNH);

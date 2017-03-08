@@ -41,10 +41,15 @@ namespace leakplug{
 #ifdef USEDSA
         // DSA = &pass->getAnalysis<EQTDDataStructures>();
         // DSA->print(errs(), M);
+        localDSA = &pass->getAnalysis<LocalDataStructures>();
+        localDSA->print(errs(), M);
+
         BU_DSA = &pass->getAnalysis<EquivBUDataStructures>();
         BU_DSA -> print(errs(), M);
-        localDSA = &pass->getAnalysis<StdLibDataStructures>();
-        localDSA->print(errs(), M);
+
+        stdlibDSA = &pass->getAnalysis<StdLibDataStructures>();
+        stdlibDSA->print(errs(), M);
+
         mea = &pass->getAnalysis<MemoryEffectAnalysis>();
         mea->print(errs(), M);
 #endif
@@ -343,12 +348,16 @@ namespace leakplug{
         AU.addRequired<EQTDDataStructures>();
         AU.addRequired<EquivBUDataStructures>();
         AU.addRequired<StdLibDataStructures>();
+        AU.addRequired<LocalDataStructures>();
         AU.addRequired<MemoryEffectAnalysis>();
 #endif
     }
 
     bool LeakPlug::runOnFunction(Function &F) {
         LeakAnalysis la(this, F);
+        // testing DSA
+        return 0;
+
         la.runAnalysis();
         if(la.cfg.mallocCallSites.size() == 0) {
             return 0;

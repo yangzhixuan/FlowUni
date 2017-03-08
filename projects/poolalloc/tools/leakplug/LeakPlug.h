@@ -39,7 +39,8 @@ namespace leakplug{
 #ifdef USEDSA
         EQTDDataStructures *DSA;
         EquivBUDataStructures *BU_DSA;
-        StdLibDataStructures *localDSA;
+        StdLibDataStructures *stdlibDSA;
+        LocalDataStructures *localDSA;
         MemoryEffectAnalysis *mea;
 #endif
         Value *mallocF;
