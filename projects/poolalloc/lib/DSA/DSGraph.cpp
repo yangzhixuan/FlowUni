@@ -634,7 +634,9 @@ void DSGraph::markIncompleteNodes(unsigned Flags) {
            I != E; ++I)
         if (isa<PointerType>(I->getType()))
           markIncompleteNode(getNodeForValue(I).getNode());
-      markIncompleteNode(FI->second.getNode());
+      if((Flags & DSGraph::IgnoreReturnNodes) == 0) {
+        markIncompleteNode(FI->second.getNode());
+      }
     }
     // Mark all vanodes as incomplete (they are also arguments)
     for (vanodes_iterator I = vanodes_begin(), E = vanodes_end();

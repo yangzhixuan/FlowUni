@@ -27,6 +27,7 @@
 
 #include <iostream>
 #include <memory>
+#include "flowuni/FlowUni.h"
 
 using namespace llvm;
 
@@ -73,7 +74,8 @@ int main(int argc, const char *argv[])
 
 
     Passes.add(createBasicAliasAnalysisPass());
-#ifdef USEDSA
+    Passes.add(new DominatorTreeWrapperPass());
+    Passes.add(new DominanceFrontier());
     Passes.add(new CallGraphWrapperPass());
     Passes.add(new AddressTakenAnalysis());
     Passes.add(new LocalDataStructures());
@@ -83,11 +85,11 @@ int main(int argc, const char *argv[])
     Passes.add(new BUDataStructures());
     Passes.add(new CompleteBUDataStructures());
     Passes.add(new EquivBUDataStructures());
-    Passes.add(new MemoryEffectAnalysis());
+//    Passes.add(new MemoryEffectAnalysis());
 //    Passes.add(new TDDataStructures());
 //    Passes.add(new EQTDDataStructures());
-#endif
-    Passes.add(new leakplug::LeakPlug());
+    // Passes.add(new leakplug::LeakPlug());
+    Passes.add(new LocalFlowUni());
 
     // Verify the final result
     Passes.add(createVerifierPass());

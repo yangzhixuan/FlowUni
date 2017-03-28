@@ -144,5 +144,9 @@ bool MemoryEffectAnalysis::_runOnDSGraph(DSGraph *g) {
     g->unlinkNode(p);
   }
 
+  g->maskIncompleteMarkers();
+  g->markIncompleteNodes(DSGraph::MarkFormalArgs | DSGraph::IgnoreReturnNodes
+                         | DSGraph::MarkGlobalsIncomplete | DSGraph::MarkVAStart);
+
   return false;
 }

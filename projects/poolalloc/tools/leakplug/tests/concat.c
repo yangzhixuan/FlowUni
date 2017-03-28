@@ -1,7 +1,15 @@
 #include <string.h>
 #include <stdlib.h>
 
-extern char* xmalloc (unsigned);
+#include <ctype.h>
+char * xmalloc (unsigned size)
+{
+  register char *value = (char *) malloc ((size_t)size);
+  if (value == 0)
+    fatal ("virtual memory exhausted");
+  return value;
+}
+
 
 char*
 concat (s1, s2)
@@ -18,7 +26,7 @@ concat (s1, s2)
 
   size1 = strlen (s1);
   size2 = strlen (s2);
-  ret_val = malloc (size1 + size2 + 1);
+  ret_val = xmalloc (size1 + size2 + 1);
   strcpy (ret_val, s1);
   strcpy (&ret_val[size1], s2);
   return ret_val;

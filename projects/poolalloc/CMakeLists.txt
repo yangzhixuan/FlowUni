@@ -48,7 +48,11 @@ set(SOURCE_FILES
     tools/leakplug/leakplug.cpp
     tools/leakplug/LeakPlug.h
     tools/leakplug/Makefile
-    tools/leakplug/World.cpp)
+    tools/leakplug/World.cpp
+
+    #FlowUni
+    lib/FlowUni/Makefile
+        include/flowuni/FlowUni.h lib/FlowUni/FlowUni.cpp)
 
 add_executable(poolalloc ${SOURCE_FILES})
 include_directories(include)

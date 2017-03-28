@@ -402,7 +402,7 @@ public:
   bool isPtrToIntNode()   const { return NodeType & PtrToIntNode;  }
   bool isVAStartNode()    const { return NodeType & VAStartNode;   }
 
-  bool isHeapOnlyNode()   const { return !(isAllocaNode() || isGlobalNode() || isExternalNode()
+  bool isHeapOnlyNode()   const { return isHeapNode() && !(isCompleteNode() || isAllocaNode() || isGlobalNode() || isExternalNode()
     || isUnknownNode() || isExternalNode() || isIntToPtrNode() || isPtrToIntNode() || isVAStartNode()); }
 
   DSNode* setAllocaMarker()     { NodeType |= AllocaNode;     return this; }

@@ -52,6 +52,7 @@ projects/*
 projects/poolalloc/Debug+Asserts
 projects/poolalloc/lib/AssistDS/Debug+Asserts
 projects/poolalloc/lib/DSA/Debug+Asserts
+projects/poolalloc/lib/FlowUni/Debug+Asserts
 projects/poolalloc/tools/WatchDog/Debug+Asserts
 projects/poolalloc/tools/pa/Debug+Asserts
 projects/poolalloc/tools/leakplug/Debug+Asserts
