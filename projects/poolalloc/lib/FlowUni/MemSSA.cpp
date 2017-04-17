@@ -7,26 +7,28 @@
 #include "llvm/IR/CFG.h"
 #include "dsa/DSGraph.h"
 
-#include "flowuni/FlowUni.h"
+#include "flowuni/MemSSA.h"
 
 #include <set>
 #include <map>
 #include <queue>
+#include <fstream>
+#include <sstream>
 
 using namespace llvm;
 
 namespace{
-  static RegisterPass<LocalFlowUni> X("flowuni", "Flow-sensitive unification based points-to anlaysis", false, false);
+  static RegisterPass<LocalMemSSA> X("localMemSSA", "Intraprocedural memory SSA based on Data Structure Analysis", false, false);
 }
 
 
-char LocalFlowUni::ID = 0;
+char LocalMemSSA::ID = 0;
 
-LocalFlowUni::LocalFlowUni() : FunctionPass(ID) {
+LocalMemSSA::LocalMemSSA() : FunctionPass(ID) {
 
 }
 
-void LocalFlowUni::getAnalysisUsage(AnalysisUsage &AU) const {
+void LocalMemSSA::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
   AU.addRequired<LocalDataStructures>();
   AU.addRequired<EquivBUDataStructures>();
@@ -59,8 +61,19 @@ namespace {
   }
 }
 
+void LocalMemSSA::clear() {
+  resources.clear();
+  memSSAUsers.clear();
+  memSSADefs.clear();
+  phiNodes.clear();
+  memModifiedByCall.clear();
+  memObjects.clear();
+}
 
-bool LocalFlowUni::runOnFunction(Function &F) {
+bool LocalMemSSA::runOnFunction(Function &F) {
+  clear();
+
+  func = &F;
   localDSA = &getAnalysis<LocalDataStructures>();
   buDSA = &getAnalysis<EquivBUDataStructures>();
   dsgraph = localDSA->getDSGraph(F);
@@ -70,7 +83,6 @@ bool LocalFlowUni::runOnFunction(Function &F) {
   errs() << "Analysis on: " << F.getName() << "\n";
 
   // Identify all resources (alloc / pointer args / globals) to be analyzed in the local phase.
-  resources.clear();
   for(inst_iterator I = inst_begin(F); I != inst_end(F); I++) {
     if(dyn_cast<AllocaInst>(&*I)) {
       resources.insert(&*I);
@@ -101,10 +113,6 @@ bool LocalFlowUni::runOnFunction(Function &F) {
   errs() << "}\n";
 
   // For each load/store instruction, build an SSA form from the results of DSA.
-  memSSAUsers.clear();
-  memModifiedByCall.clear();
-  phiNodes.clear();
-  memObjects.clear();
 
   for(auto val : resources) {
     assert(dsgraph->hasNodeForValue(val) && "hasNodeForValue");
@@ -129,6 +137,17 @@ bool LocalFlowUni::runOnFunction(Function &F) {
           }
         }
 
+      } else if(AllocaInst* alloca = dyn_cast<AllocaInst>(&*inst_ite)) {
+        // AllocaInst is treated as storing an 'unspecific' value to the memory.
+        Value *ptr = alloca;
+        if(aliasResource(ptr)) {
+          DSNode *n = dsgraph->getNodeForValue(ptr).getNode();
+          for(auto frontier : frontiers) {
+            if(phiNodes[frontier].count(n) == 0) {
+              phiNodes[frontier][n] = PHINode::Create( Type::getVoidTy(F.getContext()), 0, "", &*(frontier->begin()));
+            }
+          }
+        }
       } else if(CallInst* call = dyn_cast<CallInst>(&*inst_ite)) {
         // Function calls are treated modifying all resources reachable from their arguments.
         for(auto &arg : call->arg_operands()) {
@@ -156,7 +175,6 @@ bool LocalFlowUni::runOnFunction(Function &F) {
   }
 
   // Add PHINode for PHINode inserted earlier until the PHINode set is closed...
-  // Flag: 明天把SSA建立好！
   std::queue<BasicBlock*> bbWithNewPHI;
   std::set<BasicBlock*> inQueue;
   for(const auto& kv : phiNodes) {
@@ -193,11 +211,22 @@ bool LocalFlowUni::runOnFunction(Function &F) {
   std::map<DSNode*, std::vector<Instruction*>> lastDef;
   buildSSARenaming(lastDef, &F.getEntryBlock());
 
-  // TODO: testing the code above.
+  // Build reverse graph for convenience.
+  for(const auto& i_us : memSSAUsers) {
+    for(const auto& user : i_us.second) {
+      memSSADefs[user].insert(i_us.first);
+    }
+  }
+
+  dump();
+
+  hidePhiNodes();
+
+
   return false;
 }
 
-void LocalFlowUni::buildSSARenaming(std::map<DSNode *, std::vector<Instruction *>> &lastDef, BasicBlock *bb) {
+void LocalMemSSA::buildSSARenaming(std::map<DSNode *, std::vector<Instruction *>> &lastDef, BasicBlock *bb) {
   // Step1. scan instructions in 'bb', adding new definitions and linking usage to its last definition.
 
   // Number of definitions added for each DSNode. It is recorded for easier stack restoring later.
@@ -210,13 +239,13 @@ void LocalFlowUni::buildSSARenaming(std::map<DSNode *, std::vector<Instruction *
   }
 
   for(auto inst_ite = bb->begin(); inst_ite != bb->end(); inst_ite++) {
-    // StoreInst and CallInst use a value and define a new version of it. LoadInst only use a value.
+    // Alloca/StoreInst/CallInst use a value and define a new version of it. LoadInst only use a value.
     if(auto store = dyn_cast<StoreInst>(&*inst_ite)) {
       Value *ptr = store->getPointerOperand();
       if(aliasResource(ptr)) {
         DSNode *n = dsgraph->getNodeForValue(ptr).getNode();
 
-        // Reads a old
+        // Reads an old
         if(lastDef[n].size() > 0) {
           Instruction *def = lastDef[n].back();
           memSSAUsers[def].insert(store);
@@ -224,6 +253,22 @@ void LocalFlowUni::buildSSARenaming(std::map<DSNode *, std::vector<Instruction *
 
         // Defines a new
         lastDef[n].push_back(store);
+        stackCount[n] += 1;
+      }
+    } else if(auto alloca = dyn_cast<AllocaInst>(&*inst_ite)) {
+      // AllocaInst is treated as storing an 'unspecific' value into the memory.
+      Value *ptr = alloca;
+      if(aliasResource(ptr)) {
+        DSNode *n = dsgraph->getNodeForValue(ptr).getNode();
+
+        // Reads an old
+        if(lastDef[n].size() > 0) {
+          Instruction *def = lastDef[n].back();
+          memSSAUsers[def].insert(alloca);
+        }
+
+        // Defines a new
+        lastDef[n].push_back(alloca);
         stackCount[n] += 1;
       }
     } else if(auto call = dyn_cast<CallInst>(&*inst_ite)) {
@@ -288,7 +333,7 @@ void LocalFlowUni::buildSSARenaming(std::map<DSNode *, std::vector<Instruction *
 }
 
 // Helper function for testing whether 'v' aliasing our 'resources'
-bool LocalFlowUni::aliasResource(Value* v) {
+bool LocalMemSSA::aliasResource(Value* v) {
   if(dsgraph->hasNodeForValue(v)) {
     DSNode *n = dsgraph->getNodeForValue(v).getNode();
     return memObjects.count(n) > 0;
@@ -297,3 +342,82 @@ bool LocalFlowUni::aliasResource(Value* v) {
   }
 }
 
+// Remove our fake PhiNodes from the function
+void LocalMemSSA::hidePhiNodes() {
+  for(const auto& kv : phiNodes) {
+    for(const auto& np: kv.second) {
+      np.second->removeFromParent();
+    }
+  }
+}
+
+void LocalMemSSA::showPhiNodes() {
+  for(const auto& kv : phiNodes) {
+    for(const auto& np: kv.second) {
+      kv.first->getInstList().insert(kv.first->getFirstInsertionPt(), np.second);
+    }
+  }
+}
+
+#if 0 // Prepared to be removed
+
+// --------------------------------------------------------------------------------
+// ------ MemSSAPredIterator
+// --------------------------------------------------------------------------------
+
+Value* LocalMemSSA::MemSSAPredIterator::operator*() const {
+  if(ite1 != ite1End) {
+    return *ite1;
+  } else {
+    return *ite2;
+  }
+}
+
+Value* LocalMemSSA::MemSSAPredIterator::operator->() const {
+  return operator*();
+}
+
+LocalMemSSA::MemSSAPredIterator& LocalMemSSA::MemSSAPredIterator::operator++() {
+  if(ite1 != ite1End) {
+    ++ite1;
+  } else {
+    ++ite2;
+  }
+  return *this;
+}
+
+LocalMemSSA::MemSSAPredIterator::MemSSAPredIterator(User::value_op_iterator ite1,
+                                                    User::value_op_iterator ite1End,
+                                                    std::unordered_set<Instruction*>::iterator ite2)
+  : ite1End(ite1End), ite1(ite1), ite2(ite2) {
+
+}
+
+LocalMemSSA::MemSSAPredIterator LocalMemSSA::memssa_pred_begin(Instruction *I) {
+  if(memSSADefs.count(I) > 0) {
+    return MemSSAPredIterator(I->value_op_begin(), I->value_op_end(), memSSADefs[I].begin());
+  } else {
+    return MemSSAPredIterator(I->value_op_begin(), I->value_op_end(), MemSSAPredIterator::emptySet.end());
+  }
+}
+
+LocalMemSSA::MemSSAPredIterator LocalMemSSA::memssa_pred_end(Instruction *I) {
+  if(memSSADefs.count(I) > 0) {
+    return MemSSAPredIterator(I->value_op_end(), I->value_op_end(), memSSADefs[I].end());
+  } else {
+    return MemSSAPredIterator(I->value_op_end(), I->value_op_end(), MemSSAPredIterator::emptySet.end());
+  }
+}
+
+bool LocalMemSSA::MemSSAPredIterator::operator==(const MemSSAPredIterator &y) const {
+  return ite1 == y.ite1 && ite2 == y.ite2;
+}
+
+bool LocalMemSSA::MemSSAPredIterator::operator!=(const MemSSAPredIterator &y) const {
+  return !(operator==(y));
+}
+
+
+std::unordered_set<Instruction*> LocalMemSSA::MemSSAPredIterator::emptySet;
+
+#endif

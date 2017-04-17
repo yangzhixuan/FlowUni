@@ -64,6 +64,8 @@ projects/poolalloc/tools/leakplug/tests/*.ll
 projects/poolalloc/tools/leakplug/tests/*.i
 projects/poolalloc/tools/leakplug/tests/spec
 
+cmake-build-debug
+
 # Clang, which is tracked independently.
 # tools/clang
 # LLDB, which is tracked independently.
@@ -76,6 +78,7 @@ tools/llgo
 tools/polly
 # Sphinx build tree, if building in-source dir.
 docs/_build
+
 
 #==============================================================================#
 # Files created in tree by the Go bindings.
