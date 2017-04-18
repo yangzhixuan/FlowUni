@@ -9,19 +9,9 @@
 
 using namespace llvm;
 
+
 namespace{
   static RegisterPass<LocalFCP> X("flowuni", "Flow-sensitive unification based points-to anlaysis", false, false);
-
-  std::string escape(Value* v) {
-    std::string str;
-    llvm::raw_string_ostream rso(str);
-    if(v > (Value*)1024) {
-      v->print(rso);
-    } else {
-      rso<<v;
-    }
-    return str;
-  }
 }
 
 
@@ -120,12 +110,14 @@ bool LocalFCP::runOnFunction(Function &F) {
     }
   }
 
-  for(auto inst : DUGNodes) {
-    worklist.push(inst);
-    inList.insert(inst);
-  }
+  // Push all DUGNodes to the worklist in an order consistent with the dominance order.
+  // (If 'a' dominates 'b', then 'a' precedes 'b' in the initial worklist). This is crucial
+  // to guarantee for every instruction in the iteration process, its used Values were
+  // calculated at least once.
+  std::unordered_set<BasicBlock*> __visitedBB;
+  initWorkListDomOrder(&F.getEntryBlock(), __visitedBB);
 
-#define __DBGFCP
+// #define __DBGFCP
 #ifdef __DBGFCP
   for(auto inst : DUGNodes) {
     errs() << "Predecessor of " << *inst << ":\n";
@@ -166,19 +158,25 @@ bool LocalFCP::runOnFunction(Function &F) {
           if(activated) {
             inDelta.push_back(delta);
           }
-          errs() << "0merge before " << *inst << "( from " << *def << ") for "<< escape(delta.x) << " and " << escape(delta.y) << "\n";
+#ifdef __DBGFCP
+          errs() << "0merge before " << *inst << "( from " << *def << ") for "<< PointToGraph::escape(delta.x) << " and " << PointToGraph::escape(delta.y) << "\n";
+#endif
         } else if(delta.type == DeltaPointToGraph::Type::PointTo) {
           Value *xTo = in.getPointTo(delta.x);
           if(xTo == nullptr) {
             in.setPointTo(delta.x, delta.y);
             inDelta.push_back(delta);
-            errs() << "0set pointTo before " << *inst << "( from " << *def << ") for "<< escape(delta.x) << " and " << escape(delta.y) << "\n";
+#ifdef __DBGFCP
+            errs() << "0set pointTo before " << *inst << "( from " << *def << ") for "<< PointToGraph::escape(delta.x) << " and " << PointToGraph::escape(delta.y) << "\n";
+#endif
           } else {
             bool activated = in.mergeRec(delta.y, xTo);
             if(activated) {
-              inDelta.push_back(make_merge(delta.y, xTo));
+              inDelta.push_back(delta);
             }
-            errs() << "1merge before " << *inst << "( from " << *def << ") for "<< escape(xTo) << " and " << escape(delta.y) << "\n";
+#ifdef __DBGFCP
+            errs() << "1merge before " << *inst << "( from " << *def << ") for "<< PointToGraph::escape(xTo) << " and " << PointToGraph::escape(delta.y) << "\n";
+#endif
           }
         }
       }
@@ -199,6 +197,8 @@ bool LocalFCP::runOnFunction(Function &F) {
       auto ptr = load->getPointerOperand();
       auto ptrMem = getMemObjectsForVal(ptr);   // resource equivalent class pointed by 'ptr'
       auto ptrTo = in.getPointTo(ptrMem);
+
+      assert(ptrMem != nullptr);
 
       if(in.valPointTo == nullptr && ptrTo != nullptr) {
         // First effective load.
@@ -236,6 +236,7 @@ bool LocalFCP::runOnFunction(Function &F) {
         auto content = store->getValueOperand();
         ptrMem = getMemObjectsForVal(ptr);
         contentMem = getMemObjectsForVal(content);
+        assert(ptrMem && contentMem && "Referenced values should be calculated at least once.");
       } else if(auto alloca = dyn_cast<AllocaInst>(inst)){
         // AllocaInst is treated as storing an 'unspecified' value into the the memory.
         if(in.valPointTo == nullptr) {
@@ -247,51 +248,50 @@ bool LocalFCP::runOnFunction(Function &F) {
         contentMem = PointToGraph::unspecificSpace;
       }
 
-      if(ptrMem && contentMem) {
-        if(in.eqClass.getRank(ptrMem) == 0) {
-          // ptrMem is a singleton equivalent class. Perform strong update.
+      if(in.eqClass.getRank(ptrMem) == 0) {
+        // ptrMem is a singleton equivalent class. Perform strong update.
 
-          // bool removed = false;
-          // Overwrite all previous 'pointTo' modification of this memory object.
-          for(auto ite = outDelta.begin(); ite != outDelta.end(); ) {
-            auto inDel = *ite;
-            if(inDel.type == DeltaPointToGraph::Type::PointTo && in.eqClass.equivalent(inDel.x, ptrMem)) {
-              ite = outDelta.erase(ite);
-          //    removed = true;
-            } else {
-              ++ite;
-            }
+        // Overwrite all previous 'pointTo' modification of this memory object.
+        for(auto ite = outDelta.begin(); ite != outDelta.end(); ) {
+          auto inDel = *ite;
+          if(inDel.type == DeltaPointToGraph::Type::PointTo && in.eqClass.equivalent(inDel.x, ptrMem)) {
+            ite = outDelta.erase(ite);
+          } else {
+            ++ite;
           }
+        }
 
+        auto delta = make_pointTo(ptrMem, contentMem);
+        if(!isEmitted(delta, inst)) {
+          outDelta.push_back(delta);
+          outInDiff.push_back(delta);
+          // errs() << "strong update for: " << *ptrMem << ", at " << *inst << ", " << escape(ptrMem) << " to " << escape(contentMem) << "\n";
+        }
+      } else {
+        // ptrMem is not a unique memory resource. Perform weak update.
+        auto ptrTo = in.getPointTo(ptrMem);
+
+        if(ptrTo == nullptr || !in.eqClass.equivalent(ptrTo, contentMem)) {
           auto delta = make_pointTo(ptrMem, contentMem);
           if(!isEmitted(delta, inst)) {
             outDelta.push_back(delta);
             outInDiff.push_back(delta);
-            errs() << "strong update for: " << *ptrMem << ", at " << *inst << ", " << escape(ptrMem) << " to " << escape(contentMem) << "\n";
-          }
-        } else {
-          // ptrMem is not a unique memory resource. Perform weak update.
-
-          auto ptrTo = in.getPointTo(ptrMem);
-          if(ptrTo == nullptr) {
-            auto delta = make_pointTo(ptrMem, contentMem);
-            if(!isEmitted(delta, inst)) {
-              outDelta.push_back(delta);
-              outInDiff.push_back(delta);
-            }
-          } else {
-            if(!in.eqClass.equivalent(ptrTo, contentMem)) {
-              auto delta = make_merge(ptrTo, contentMem);
-              if(!isEmitted(delta, inst)) {
-                outDelta.push_back(delta);
-                outInDiff.push_back(delta);
-              }
-            }
           }
         }
       }
     } else if(auto phi = dyn_cast<PHINode>(inst)) {
       // Nothing needed
+    } else if(auto cast = dyn_cast<BitCastInst>(inst)) {
+      if(cast->getSrcTy()->isPointerTy() && cast->getDestTy()->isPointerTy()) {
+        // Pointer to pointer cast
+        auto src = cast->getOperand(0);
+        auto srcMem = getMemObjectsForVal(src);
+        if(in.valPointTo == nullptr) {
+          valPtrChanged = true;
+          in.valPointTo = srcMem;
+          // TODO: maintain valPointToSet in an easy way.
+        }
+      }
     } else {
       // TODO: other instructions
     }
@@ -310,6 +310,20 @@ bool LocalFCP::runOnFunction(Function &F) {
 
   // Apply dataOutInDiff to dataIn to compute dataOut.
   for(auto inst: DUGNodes) {
+
+    // For instructions like 'BitCastInst', its valPointToSets is not maintained in the iteration process.
+    // Fix this at this point.
+    if(dataIn[inst].valPointTo != nullptr) {
+      auto& in = dataIn[inst];
+      Value *ptr = in.valPointTo;
+      in.valPointToSets.insert(in.eqClass.find(ptr));
+      for(auto& kv : in.eqClass.leader) {
+        if(in.eqClass.equivalent(kv.first, ptr)) {
+          in.valPointToSets.insert(kv.first);
+        }
+      }
+    }
+
     dataOut[inst] = dataIn[inst];
     for(const auto& delta: dataOutInDiff[inst]) {
       if(delta.type == DeltaPointToGraph::Type::Merge) {
@@ -318,7 +332,7 @@ bool LocalFCP::runOnFunction(Function &F) {
         dataOut[inst].setPointTo(delta.x, delta.y);
       }
     }
-#if 0
+#ifdef __DBGFCP
     if(auto store = dyn_cast<StoreInst>(inst)) {
       auto ptrMem = getMemObjectsForVal(store->getValueOperand());
       errs() << "Before: " << *inst << ", " << dataIn[inst].eqClass.getRank(ptrMem) << "\n";
@@ -332,6 +346,8 @@ bool LocalFCP::runOnFunction(Function &F) {
     }
 #endif
   }
+
+  checkAssertions();
 
   dump();
 
@@ -453,6 +469,19 @@ bool LocalFCP::hasMemObjectsForVal(Value *x) {
   return false;
 }
 
+std::unordered_set<Value*> LocalFCP::getPointToSetForVal(Value *x) {
+  std::unordered_set<Value*> s;
+  if(resources.count(x) > 0) {
+    s.insert(x);
+  } else if(auto inst = dyn_cast<Instruction>(x)) {
+    if(DUGNodes.count(inst) > 0) {
+      s = dataIn[inst].valPointToSets;
+    }
+  }
+  return s;
+}
+
+
 bool PointToGraph::mergeRec(Value *x, Value *y) {
   if(x == nullptr || y == nullptr) {
     return false;
@@ -469,4 +498,38 @@ bool PointToGraph::mergeRec(Value *x, Value *y) {
     }
   }
   return activated;
+}
+
+std::string PointToGraph::escape(Value* v) {
+  std::string str;
+  llvm::raw_string_ostream rso(str);
+  if(v > (Value*)1024) {
+    v->print(rso);
+  } else {
+    rso<<v;
+  }
+  return str;
+}
+
+void LocalFCP::initWorkListDomOrder(BasicBlock *bb, std::unordered_set<BasicBlock*>& visited) {
+  visited.insert(bb);
+  for(auto& n_phi : memSSA->phiNodes[bb]) {
+    PHINode *phi = n_phi.second;
+    if(DUGNodes.count(phi) > 0) {
+      worklist.push(phi);
+      inList.insert(phi);
+    }
+  }
+  for(auto& I : *bb) {
+    Instruction *inst = &I;
+    if(DUGNodes.count(inst) > 0) {
+      worklist.push(inst);
+      inList.insert(inst);
+    }
+  }
+  for(auto succ: successors(bb)) {
+    if(visited.count(succ) == 0) {
+      initWorkListDomOrder(succ, visited);
+    }
+  }
 }

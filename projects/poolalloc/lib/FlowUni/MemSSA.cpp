@@ -80,7 +80,7 @@ bool LocalMemSSA::runOnFunction(Function &F) {
   domFrontiers = &getAnalysis<DominanceFrontier>();
   domTree = &(getAnalysis<DominatorTreeWrapperPass>().getDomTree());
 
-  errs() << "Analysis on: " << F.getName() << "\n";
+  errs() << "\n" << "Analysis on: " << F.getName() << "\n";
 
   // Identify all resources (alloc / pointer args / globals) to be analyzed in the local phase.
   for(inst_iterator I = inst_begin(F); I != inst_end(F); I++) {
@@ -106,11 +106,14 @@ bool LocalMemSSA::runOnFunction(Function &F) {
     }
   }
 
+// #define __DBG_MEMSSA
+#ifdef __DBG_MEMSSA
   errs() << "Resources: {\n";
   for(auto r : resources) {
     errs() << *r << "\n";
   }
   errs() << "}\n";
+#endif
 
   // For each load/store instruction, build an SSA form from the results of DSA.
 
@@ -203,9 +206,11 @@ bool LocalMemSSA::runOnFunction(Function &F) {
     }
   }
 
+#ifdef __DBG_MEMSSA
   errs() << "IR with PHI { \n";
   errs() << F;
   errs() <<"}\n";
+#endif
 
   // Step2. resolve all def-use relations of SSA form.
   std::map<DSNode*, std::vector<Instruction*>> lastDef;

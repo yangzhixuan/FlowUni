@@ -1,3 +1,7 @@
+void __print_pointTo(void* n);
+void __may_pointTo(void* n, ...);
+void __may_pointTo_exactly(void* n, ...);
+
 int f() {
   int x ;
   if(x > 0) {
@@ -31,12 +35,12 @@ int f2() {
 // test strong update.
 int f3() {
   int x, y;
-  int *p1, *p2, *p3;
+  int *p1;
   p1 = &x;
-  p2 = p1;
+  __may_pointTo_exactly(p1, &x);
 
   p1 = &y;
-  p3 = p1;
+  __may_pointTo_exactly(p1, &y);
   return 0;
 }
 
@@ -44,8 +48,9 @@ int f3() {
 int f4() {
   int *p, *probe, x;
   probe = p;
+  __print_pointTo(p);
   p = &x;
-  probe = p;
+  __may_pointTo_exactly(p, &x);
 
   return 0;
 }
@@ -55,11 +60,24 @@ int f5() {
   int *p, **pp, x, y;
   pp = &p;
   p = &x;
-  int probe = **pp;
+  __may_pointTo_exactly(*pp, &x);
   if(x < 0) {
     p = &y;
   }
-  probe = **pp;
+  __may_pointTo_exactly(*pp, &x, &y);
+  return 0;
+}
+
+// test loop
+int f6() {
+  int **pp, *x, *y, n, m;
+  pp = &x;
+  x = &m;
+  do {
+    *pp = &n;
+  } while(n);
+  __may_pointTo_exactly(x, &n);
+
   return 0;
 }
 

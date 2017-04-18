@@ -20,6 +20,7 @@
 #include <unordered_map>
 #include <queue>
 
+
 namespace llvm {
 
   // Tarjan's amortized O(alpha(n)) disjoint-set implementation.
@@ -55,6 +56,9 @@ namespace llvm {
     // uninitialized memory objects point to 'unspecificiSpace'
     static Value* unspecificSpace;
 
+    // Output an Value. Escape for pesudo Value like 'unspecificSpace'.
+    static std::string escape(Value* v);
+
     PointToGraph();
   };
 
@@ -81,6 +85,7 @@ namespace llvm {
     // Return nullptr otherwise.
     Value *getMemObjectsForVal(Value *x);
     bool hasMemObjectsForVal(Value *x);
+    std::unordered_set<Value*> getPointToSetForVal(Value *x);
 
     // Resources considered in this phase.
     std::unordered_set<Value*> resources;
@@ -115,6 +120,14 @@ namespace llvm {
 
     // Check whether 'd' has already been emmited/applied to the input data of 'i'
     bool isEmitted(const DeltaPointToGraph& d, Instruction* i);
+
+    // Push all DUGNodes to the worklist in an order consistent with the dominance order.
+    // (If 'a' dominates 'b', then 'a' precedes 'b' in the initial worklist)
+    void initWorkListDomOrder(BasicBlock *bb, std::unordered_set<BasicBlock*>& visited);
+
+    // Check testing annotations in the code.
+    void checkAssertions();
+
   };
 
 }
