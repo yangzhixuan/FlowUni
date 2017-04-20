@@ -233,11 +233,7 @@ void LocalFCP::dump() {
 
   // Emit all resources nodes.
   for(auto val: resources) {
-    if(val == PointToGraph::unspecificSpace) {
-      of << indent << string_format("%s[label=\"%s\"];\n", nodeName(val, "r").c_str(), "unspecified space");
-    } else {
-      of << indent << string_format("%s[label=\"%s\"];\n", nodeName(val, "r").c_str(), toString(*val).c_str());
-    }
+    of << indent << string_format("%s[label=\"%s\"];\n", nodeName(val, "r").c_str(), PointToGraph::escape(val).c_str());
   }
 
   // All values are a subgraph.

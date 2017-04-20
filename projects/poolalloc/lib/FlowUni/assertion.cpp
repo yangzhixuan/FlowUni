@@ -57,12 +57,12 @@ void LocalFCP::checkAssertions() {
           bool failed = false;
           if(funcName == "__may_pointTo") {
             if(!isSubset(ptrSet, checkedSet)) {
-              errs() << RED_BEGIN << "Assertion failed " << COLOR_END << "at: " << *inst << "\n";
+              errs() << RED_BEGIN << "Assertion failed ""at: " << COLOR_END << *inst << "\n";
               failed = true;
             }
           } else if(funcName == "__may_pointTo_exactly") {
             if(!isSubset(ptrSet, checkedSet) || !isSubset(checkedSet, ptrSet)) {
-              errs() << RED_BEGIN << "Assertion failed " << COLOR_END << "at: " << *inst << "\n";
+              errs() << RED_BEGIN << "Assertion failed ""at: " << COLOR_END << *inst << "\n";
               failed = true;
             }
           }
@@ -80,7 +80,7 @@ void LocalFCP::checkAssertions() {
             }
             errs() << "}\n";
           } else {
-            errs() << GREEN_BEGIN << "Assertion passed " << COLOR_END << "for: " << *inst << "\n";
+            errs() << GREEN_BEGIN << "Assertion passed ""for: " << COLOR_END << *inst << "\n";
           }
         }
       }

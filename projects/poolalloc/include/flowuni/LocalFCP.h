@@ -53,8 +53,17 @@ namespace llvm {
     // (Recursively) merge the equivalent classes represented by 'x' and 'y'.
     bool mergeRec(Value *x, Value *y);
 
-    // uninitialized memory objects point to 'unspecificiSpace'
+    // Equivalent to merge x with an unnamed element.
+    void mergeUnnamedRec(Value *x);
+
+    // Uninitialized memory objects point to 'unspecificiSpace'
     static Value* unspecificSpace;
+
+    // Fake pointers for placeholders. Used for memory locations pointed by arguments or globals.
+    static char* const externalPlaceholderBase;
+    static char* const externalPlaceholderTop;
+    static char* externalPlaceholderCurrent;
+    static Value* getFreshExternalPlaceholder();
 
     // Output an Value. Escape for pesudo Value like 'unspecificSpace'.
     static std::string escape(Value* v);
@@ -101,6 +110,12 @@ namespace llvm {
     std::unordered_map<Instruction*, std::unordered_set<Instruction*>> defuseEdges;
     std::unordered_map<Instruction*, std::unordered_set<Instruction*>> usedefEdges;
 
+    // Locations pointed from higher order pointers of globals and args are 'implicit' arguments.
+    // We assign a unique name for these implicit arguments.
+    // The following unordered_map maps globals, args, implicit arguments to the implicit argument
+    // pointed by the key.
+    std::unordered_map<Value*, Value*> implicitArgsPointedBy;
+
     // Dump the point-to graph as a DOT file.
     void dump();
   private:
@@ -128,6 +143,11 @@ namespace llvm {
     // Check testing annotations in the code.
     void checkAssertions();
 
+    // Identify resources not created by instructions, i.e. arguments & global variables.
+    void identifyResources();
+
+    // Get implicit argument
+    Value *getImplicitArgOf(Value *x);
   };
 
 }

@@ -1,6 +1,4 @@
-void __print_pointTo(void* n);
-void __may_pointTo(void* n, ...);
-void __may_pointTo_exactly(void* n, ...);
+#include "FCPAnnotation.h"
 
 int f() {
   int x ;
@@ -25,11 +23,13 @@ int f2() {
   *p1 = *p2;
   if(x < 4) {
     p3 = &x;
+    __may_pointTo_exactly(p3, &x);
   } else {
     p3 = &y;
+    __may_pointTo_exactly(p3, &y);
   }
-  *p3 = y;
-  return *p3;
+  __may_pointTo_exactly(p3, &x, &y);
+  return 0;
 }
 
 // test strong update.
@@ -78,8 +78,18 @@ int f6() {
   } while(n);
   __may_pointTo_exactly(x, &n);
 
+  do {
+    *pp = &n;
+    if(n < 0) {
+      x = &m;
+    }
+  } while(n);
+  __may_pointTo_exactly(x, &n, &m);
+
   return 0;
 }
+
+
 
 #if 0   // it takes too long to draw the JPEG
 int f2_long() {

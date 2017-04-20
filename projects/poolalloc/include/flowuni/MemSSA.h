@@ -26,9 +26,6 @@ namespace llvm {
     void getAnalysisUsage(AnalysisUsage &AU) const override;
     bool runOnFunction(Function &F) override;
 
-    // Value-s treated as resources in the local phase (global variables, pointer arguments, alloca-s)
-    std::unordered_set<Value*> resources;
-
     // Maps each StoreInst/CallInst to its users
     std::unordered_map<Instruction*, std::unordered_set<Instruction*>> memSSAUsers;
 

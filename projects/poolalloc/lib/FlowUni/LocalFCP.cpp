@@ -40,13 +40,15 @@ void LocalFCP::clear() {
   dataOutInDiff.clear();
   resources.clear();
   memSSA = nullptr;
+  implicitArgsPointedBy.clear();
 }
 
 bool LocalFCP::runOnFunction(Function &F) {
   clear();
   memSSA = &getAnalysis<LocalMemSSA>();
   func = &F;
-  resources = memSSA->resources;
+
+  identifyResources();
 
   // An instruction is considered interesting if it returns an 'interesting' pointer-pointer
   // or it uses an 'interesting' pointer-pointer.
@@ -129,8 +131,6 @@ bool LocalFCP::runOnFunction(Function &F) {
 
   // TODO: remove redundant DUGNodes, e.g. PhiNodes for non-pointer variables, LLVM debug declaring calls.
 
-  // TODO: initialize global variable/argument variable in PointGraphs.
-
   while(!worklist.empty()) {
     Instruction *inst = worklist.front();
     assert(DUGNodes.count(inst) > 0);
@@ -200,6 +200,18 @@ bool LocalFCP::runOnFunction(Function &F) {
 
       assert(ptrMem != nullptr);
 
+      outDelta.clear();
+
+      if(ptrTo == nullptr) {
+        // TODO: assert ptrMem is external.
+        ptrTo = getImplicitArgOf(ptrMem);
+        errs() << "get implicit argument at " << *inst << ", for " << PointToGraph::escape(ptrMem) << ", result: " << PointToGraph::escape(ptrTo) << "\n";
+
+        in.setPointTo(ptrMem, ptrTo);
+        outDelta.push_back(make_pointTo(ptrMem, ptrTo));
+        resources.insert(ptrTo);
+      }
+
       if(in.valPointTo == nullptr && ptrTo != nullptr) {
         // First effective load.
         in.valPointTo = ptrTo;
@@ -207,7 +219,6 @@ bool LocalFCP::runOnFunction(Function &F) {
         valPtrChanged = true;
       }
       if(in.valPointTo != nullptr) {
-        outDelta.clear();
         auto ptrToLeader = in.eqClass.find(in.valPointTo);
 
         // The following code calculate dataOut for LoadInst by brute force, i.e.,
@@ -236,6 +247,11 @@ bool LocalFCP::runOnFunction(Function &F) {
         auto content = store->getValueOperand();
         ptrMem = getMemObjectsForVal(ptr);
         contentMem = getMemObjectsForVal(content);
+        if(ptrMem == nullptr || contentMem == nullptr) {
+          errs() << "Error at " << *inst << "\n";
+          errs() << *ptr << " " << ptrMem << "\n";
+          errs() << *content << " " << contentMem << "\n";
+        }
         assert(ptrMem && contentMem && "Referenced values should be calculated at least once.");
       } else if(auto alloca = dyn_cast<AllocaInst>(inst)){
         // AllocaInst is treated as storing an 'unspecified' value into the the memory.
@@ -272,6 +288,16 @@ bool LocalFCP::runOnFunction(Function &F) {
         auto ptrTo = in.getPointTo(ptrMem);
 
         if(ptrTo == nullptr || !in.eqClass.equivalent(ptrTo, contentMem)) {
+          if(ptrTo == nullptr) {
+            // TODO: assert ptrMem is external.
+            auto ptrToNew = getImplicitArgOf(ptrMem);
+            errs() << "get implicit argument at " << *inst << ", for " << PointToGraph::escape(ptrMem) << ", result: " << PointToGraph::escape(ptrToNew) << "\n";
+            auto delta = make_pointTo(ptrMem, ptrToNew);
+            outDelta.push_back(delta);
+            outInDiff.push_back(delta);
+            resources.insert(ptrToNew);
+          }
+
           auto delta = make_pointTo(ptrMem, contentMem);
           if(!isEmitted(delta, inst)) {
             outDelta.push_back(delta);
@@ -352,6 +378,33 @@ bool LocalFCP::runOnFunction(Function &F) {
   dump();
 
   return false;
+}
+
+void LocalFCP::identifyResources() {
+  Function &F = *func;
+  // Identify all resources (alloc / pointer args / globals) to be analyzed in the local phase.
+  for(inst_iterator I = inst_begin(F); I != inst_end(F); I++) {
+    if(dyn_cast<AllocaInst>(&*I)) {
+      resources.insert(&*I);
+    }
+#if 0 // pointers returned by functions need not to be processed in the local phase.
+    else if(auto ci = dyn_cast<CallInst>(&*I)) {
+      if(ci->getType()->isPointerTy()) {
+        resources.insert(ci);
+      }
+    }
+#endif
+    for(auto op = I->value_op_begin(); op != I->value_op_end(); op++) {
+      if(dyn_cast<GlobalVariable>(*op)) {
+        resources.insert(*op);
+      }
+    }
+  }
+  for(auto arg_ite = F.arg_begin(); arg_ite != F.arg_end(); arg_ite++) {
+    if(arg_ite->getType()->isPointerTy()) {
+      resources.insert(&*arg_ite);
+    }
+  }
 }
 
 bool LocalFCP::isEmitted(const DeltaPointToGraph &d, Instruction *i) {
@@ -437,6 +490,18 @@ Value* PointToGraph::setPointTo(Value *v, Value* to) {
 
 Value* PointToGraph::unspecificSpace = (Value*)1;
 
+char* const PointToGraph::externalPlaceholderBase = (char* const)1024;
+char* const PointToGraph::externalPlaceholderTop = (char* const)(0x8048000);
+char* PointToGraph::externalPlaceholderCurrent = (char*)1024;
+Value* PointToGraph::getFreshExternalPlaceholder() {
+  Value* ret = (Value*) (externalPlaceholderCurrent++);
+  if(externalPlaceholderCurrent >= externalPlaceholderTop) {
+    errs() << "Fake pointers address space wrapped!\n";
+    externalPlaceholderCurrent = externalPlaceholderBase;
+  }
+  return ret;
+}
+
 DeltaPointToGraph::DeltaPointToGraph(DeltaPointToGraph::Type type, Value *x, Value *y) : type(type), x(x), y(y) { }
 
 DeltaPointToGraph llvm::make_pointTo(Value* x, Value *y) {
@@ -482,10 +547,27 @@ std::unordered_set<Value*> LocalFCP::getPointToSetForVal(Value *x) {
 }
 
 
-bool PointToGraph::mergeRec(Value *x, Value *y) {
-  if(x == nullptr || y == nullptr) {
-    return false;
+void PointToGraph::mergeUnnamedRec(Value *x) {
+  if(eqClass.getRank(x) == 0) {
+    eqClass.rank[eqClass.find(x)] = 1;
   }
+  Value *to = getPointTo(x);
+  if(to != nullptr) {
+    mergeUnnamedRec(to);
+  }
+}
+
+bool PointToGraph::mergeRec(Value *x, Value *y) {
+  if(x == nullptr && y == nullptr) {
+    return false;
+  } else if(x == nullptr) {
+    mergeUnnamedRec(y);
+    return true;
+  } else if(y == nullptr) {
+    mergeUnnamedRec(x);
+    return true;
+  }
+
   Value *px = getPointTo(x);
   Value *py = getPointTo(y);
   bool activated = eqClass.merge(x, y);
@@ -503,10 +585,14 @@ bool PointToGraph::mergeRec(Value *x, Value *y) {
 std::string PointToGraph::escape(Value* v) {
   std::string str;
   llvm::raw_string_ostream rso(str);
-  if(v > (Value*)1024) {
-    v->print(rso);
+  if(v == nullptr) {
+    rso << "<nullptr>";
+  } else if(v == unspecificSpace) {
+    rso << "<unspecific space>";
+  } else if((char*)v >= externalPlaceholderBase && (char*)v < externalPlaceholderTop) {
+    rso << "<external " << ((char*)v - (char*)externalPlaceholderBase) << ">";
   } else {
-    rso<<v;
+    v->print(rso);
   }
   return str;
 }
@@ -532,4 +618,17 @@ void LocalFCP::initWorkListDomOrder(BasicBlock *bb, std::unordered_set<BasicBloc
       initWorkListDomOrder(succ, visited);
     }
   }
+}
+
+Value* LocalFCP::getImplicitArgOf(Value *x) {
+  // FIXME: if 'x' is not a single memory object, the returned Value* should also not.
+  // However, the following code should be OK if strong update is sacrificed for arguments and globals.
+  // If you want to modify the code to support strong update for arguments:
+  //   1. Modify the following code to return a merged implicit argument of all implicit argument pointed by
+  //      elements of 'x'.
+  //   2. Modify mergeRec() for the case of one argument is nullptr.
+  if(implicitArgsPointedBy.count(x) == 0) {
+    implicitArgsPointedBy[x] = PointToGraph::getFreshExternalPlaceholder();
+  }
+  return implicitArgsPointedBy[x];
 }

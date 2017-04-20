@@ -62,7 +62,6 @@ namespace {
 }
 
 void LocalMemSSA::clear() {
-  resources.clear();
   memSSAUsers.clear();
   memSSADefs.clear();
   phiNodes.clear();
@@ -82,45 +81,13 @@ bool LocalMemSSA::runOnFunction(Function &F) {
 
   errs() << "\n" << "Analysis on: " << F.getName() << "\n";
 
-  // Identify all resources (alloc / pointer args / globals) to be analyzed in the local phase.
-  for(inst_iterator I = inst_begin(F); I != inst_end(F); I++) {
-    if(dyn_cast<AllocaInst>(&*I)) {
-      resources.insert(&*I);
-    }
-#if 0 // pointers returned by functions need not to be processed in the local phase.
-    else if(auto ci = dyn_cast<CallInst>(&*I)) {
-      if(ci->getType()->isPointerTy()) {
-        resources.insert(ci);
-      }
-    }
-#endif
-    for(auto op = I->value_op_begin(); op != I->value_op_end(); op++) {
-      if(dyn_cast<GlobalVariable>(*op)) {
-        resources.insert(*op);
-      }
-    }
-  }
-  for(auto arg_ite = F.arg_begin(); arg_ite != F.arg_end(); arg_ite++) {
-    if(arg_ite->getType()->isPointerTy()) {
-      resources.insert(&*arg_ite);
-    }
+  for(auto ite = dsgraph->node_begin(); ite != dsgraph->node_end(); ite++) {
+    memObjects.insert(&*ite);
   }
 
 // #define __DBG_MEMSSA
-#ifdef __DBG_MEMSSA
-  errs() << "Resources: {\n";
-  for(auto r : resources) {
-    errs() << *r << "\n";
-  }
-  errs() << "}\n";
-#endif
 
   // For each load/store instruction, build an SSA form from the results of DSA.
-
-  for(auto val : resources) {
-    assert(dsgraph->hasNodeForValue(val) && "hasNodeForValue");
-    memObjects.insert(dsgraph->getNodeForValue(val).getNode());
-  }
 
   // Step1. place all necessary PHINodes for memory objects
   for(auto bb_ite = F.begin(); bb_ite != F.end(); bb_ite++) {
