@@ -285,3 +285,51 @@ void LocalFCP::dump() {
 
   of.close();
 }
+
+void LocalFCP::dumpSummary() {
+  std::unordered_map<Value*, std::unordered_set<Value*>> partition;
+  for(auto kv : summary.eqClass.leader) {
+    auto leader = summary.eqClass.find(kv.first);
+    partition[leader].insert(kv.first);
+    partition[leader].insert(leader);
+  }
+  for(auto kv : summary.pointTo) {
+    auto leader = summary.eqClass.find(kv.first);
+    partition[leader].insert(leader);
+    leader = summary.eqClass.find(kv.second);
+    partition[leader].insert(leader);
+  }
+
+  std::ofstream of;
+  of.open("localFCP.sum." + func->getName().str() + ".dot", std::fstream::out);
+
+  IndentLevel indent;
+  of << "digraph {\n";
+  indent.inc();
+
+  for(const auto& kv : partition) {
+    std::string label;
+    for(auto r : kv.second) {
+      label = label + PointToGraph::escape(r) + "\\n";
+    }
+    of << indent << string_format("%s[label=\"%s\"];\n", nodeName(kv.first).c_str(), label.c_str());
+  }
+
+  for(const auto& kv : partition) {
+    auto to = summary.getPointTo(kv.first);
+    if(to != nullptr) {
+      auto leader = summary.eqClass.find(to);
+      of << indent << string_format("%s -> %s;\n", nodeName(kv.first).c_str(), nodeName(leader).c_str());
+    }
+  }
+
+  if(summary.valPointTo != nullptr) {
+    of << indent << string_format("%s[label=\"%s\"];\n", "ret", "<return>");
+    of << indent << string_format("%s -> %s;\n", "ret", nodeName(summary.eqClass.find(summary.valPointTo)).c_str());
+  }
+
+
+  of << "}\n";
+  indent.dec();
+  of.close();
+}

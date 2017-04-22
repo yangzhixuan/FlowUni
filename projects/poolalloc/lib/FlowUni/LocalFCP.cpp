@@ -41,6 +41,8 @@ void LocalFCP::clear() {
   resources.clear();
   memSSA = nullptr;
   implicitArgsPointedBy.clear();
+  externalResources.clear();
+  summary = PointToGraph();
 }
 
 bool LocalFCP::runOnFunction(Function &F) {
@@ -54,6 +56,8 @@ bool LocalFCP::runOnFunction(Function &F) {
   // or it uses an 'interesting' pointer-pointer.
   for(inst_iterator I = inst_begin(F); I != inst_end(F); I++) {
     if(resources.count(&*I)) {
+      DUGNodes.insert(&*I);
+    } else if(dyn_cast<ReturnInst>(&*I)) {
       DUGNodes.insert(&*I);
     } else {
       for (auto op = I->value_op_begin(); op != I->value_op_end(); op++) {
@@ -119,7 +123,7 @@ bool LocalFCP::runOnFunction(Function &F) {
   std::unordered_set<BasicBlock*> __visitedBB;
   initWorkListDomOrder(&F.getEntryBlock(), __visitedBB);
 
-// #define __DBGFCP
+ #define __DBGFCP
 #ifdef __DBGFCP
   for(auto inst : DUGNodes) {
     errs() << "Predecessor of " << *inst << ":\n";
@@ -203,7 +207,8 @@ bool LocalFCP::runOnFunction(Function &F) {
       outDelta.clear();
 
       if(ptrTo == nullptr) {
-        // TODO: assert ptrMem is external.
+        assert(externalResources.count(ptrMem) > 0 && "Non-external memory objects should always points to something");
+
         ptrTo = getImplicitArgOf(ptrMem);
         errs() << "get implicit argument at " << *inst << ", for " << PointToGraph::escape(ptrMem) << ", result: " << PointToGraph::escape(ptrTo) << "\n";
 
@@ -264,7 +269,7 @@ bool LocalFCP::runOnFunction(Function &F) {
         contentMem = PointToGraph::unspecificSpace;
       }
 
-      if(in.eqClass.getRank(ptrMem) == 0) {
+      if(in.eqClass.getRank(ptrMem) == 0 /* && externalResources.count(ptrMem) == 0*/) {
         // ptrMem is a singleton equivalent class. Perform strong update.
 
         // Overwrite all previous 'pointTo' modification of this memory object.
@@ -289,7 +294,7 @@ bool LocalFCP::runOnFunction(Function &F) {
 
         if(ptrTo == nullptr || !in.eqClass.equivalent(ptrTo, contentMem)) {
           if(ptrTo == nullptr) {
-            // TODO: assert ptrMem is external.
+            assert(externalResources.count(ptrMem) > 0 && "Non-external memory objects should always points to something");
             auto ptrToNew = getImplicitArgOf(ptrMem);
             errs() << "get implicit argument at " << *inst << ", for " << PointToGraph::escape(ptrMem) << ", result: " << PointToGraph::escape(ptrToNew) << "\n";
             auto delta = make_pointTo(ptrMem, ptrToNew);
@@ -317,6 +322,12 @@ bool LocalFCP::runOnFunction(Function &F) {
           in.valPointTo = srcMem;
           // TODO: maintain valPointToSet in an easy way.
         }
+      }
+    } else if(auto ret = dyn_cast<ReturnInst>(inst)) {
+      Value *retPtr = ret->getReturnValue();
+      if(retPtr->getType()->isPointerTy()) {
+        auto retMem = getMemObjectsForVal(retPtr);
+        in.valPointTo = retMem;
       }
     } else {
       // TODO: other instructions
@@ -373,6 +384,8 @@ bool LocalFCP::runOnFunction(Function &F) {
 #endif
   }
 
+  generateSummary();
+
   checkAssertions();
 
   dump();
@@ -397,12 +410,14 @@ void LocalFCP::identifyResources() {
     for(auto op = I->value_op_begin(); op != I->value_op_end(); op++) {
       if(dyn_cast<GlobalVariable>(*op)) {
         resources.insert(*op);
+        externalResources.insert(*op);
       }
     }
   }
   for(auto arg_ite = F.arg_begin(); arg_ite != F.arg_end(); arg_ite++) {
     if(arg_ite->getType()->isPointerTy()) {
       resources.insert(&*arg_ite);
+      externalResources.insert(&*arg_ite);
     }
   }
 }
@@ -629,6 +644,42 @@ Value* LocalFCP::getImplicitArgOf(Value *x) {
   //   2. Modify mergeRec() for the case of one argument is nullptr.
   if(implicitArgsPointedBy.count(x) == 0) {
     implicitArgsPointedBy[x] = PointToGraph::getFreshExternalPlaceholder();
+    externalResources.insert(implicitArgsPointedBy[x]);
   }
   return implicitArgsPointedBy[x];
+}
+
+void LocalFCP::generateSummary() {
+  // Merge all ReturnInst into a single summary.
+
+  std::vector<Instruction*> retInsts;
+  for(auto inst : DUGNodes) {
+    if(dyn_cast<ReturnInst>(inst)) {
+      retInsts.push_back(inst);
+    }
+  }
+
+  if(retInsts.size() == 0) {
+    return;
+  }
+
+  summary = dataOut[retInsts[0]];
+
+  for(int i = 1; i < retInsts.size(); i++) {
+    const auto& ptg = dataOut[retInsts[i]];
+    for(auto kv : ptg.eqClass.leader) {
+      summary.mergeRec(kv.first, kv.second);
+    }
+    for(auto kv : ptg.pointTo) {
+      auto ptrTo = summary.getPointTo(kv.first);
+      if(ptrTo == nullptr) {
+        summary.setPointTo(kv.first, kv.second);
+      } else {
+        summary.mergeRec(kv.second, ptrTo);
+      }
+    }
+    summary.mergeRec(summary.valPointTo, ptg.valPointTo);
+  }
+
+  dumpSummary();
 }

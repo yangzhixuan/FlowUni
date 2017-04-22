@@ -48,3 +48,13 @@ int f4() {
   __may_pointTo_exactly(**p3, **x);
   return 0;
 }
+
+int f5(int **x) {
+  int n;
+  *x = *x;
+  if(n) {
+    *x = &n;
+  }
+  __print_pointTo(*x);
+  return 0;
+}

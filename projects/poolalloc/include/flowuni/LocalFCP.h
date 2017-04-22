@@ -116,8 +116,17 @@ namespace llvm {
     // pointed by the key.
     std::unordered_map<Value*, Value*> implicitArgsPointedBy;
 
+    // Arguments, globals, and memory objects pointed by arguments and globals.
+    std::unordered_set<Value*> externalResources;
+
+    // The 'PointToGraph' for all variables at the returning point.
+    PointToGraph summary;
+
     // Dump the point-to graph as a DOT file.
     void dump();
+
+    // Dump the summary (point-to graph at returning points) as a DOT file.
+    void dumpSummary();
   private:
     std::queue<Instruction*> worklist;
     std::unordered_set<Instruction*> inList;
@@ -148,6 +157,9 @@ namespace llvm {
 
     // Get implicit argument
     Value *getImplicitArgOf(Value *x);
+
+    // Generate summary at returning points.
+    void generateSummary();
   };
 
 }

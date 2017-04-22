@@ -268,6 +268,13 @@ void LocalMemSSA::buildSSARenaming(std::map<DSNode *, std::vector<Instruction *>
           memSSAUsers[def].insert(load);
         }
       }
+    } else if(auto ret = dyn_cast<ReturnInst>(&*inst_ite)) {
+      // Return is treated as read all possible resources so that information for
+      // all resources can be merged here.
+      for(const auto& n_defs : lastDef) {
+        Instruction *def = n_defs.second.back();
+        memSSAUsers[def].insert(ret);
+      }
     }
   }
 
