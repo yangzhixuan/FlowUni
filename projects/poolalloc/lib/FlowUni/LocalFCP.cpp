@@ -369,19 +369,6 @@ bool LocalFCP::runOnFunction(Function &F) {
         dataOut[inst].setPointTo(delta.x, delta.y);
       }
     }
-#ifdef __DBGFCP
-    if(auto store = dyn_cast<StoreInst>(inst)) {
-      auto ptrMem = getMemObjectsForVal(store->getValueOperand());
-      errs() << "Before: " << *inst << ", " << dataIn[inst].eqClass.getRank(ptrMem) << "\n";
-      errs() << "After: " << *inst << ", " << dataOut[inst].eqClass.getRank(ptrMem) << "\n";
-    }
-    if(auto load = dyn_cast<LoadInst>(inst)) {
-      auto ptrMem = getMemObjectsForVal(load->getPointerOperand());
-      auto contentMem = dataIn[inst].getPointTo(ptrMem);
-      errs() << "Before: " << *inst << ", " << dataIn[inst].eqClass.getRank(contentMem) << "\n";
-      errs() << "After: " << *inst << ", " << dataOut[inst].eqClass.getRank(contentMem) << "\n";
-    }
-#endif
   }
 
   generateSummary();
