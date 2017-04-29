@@ -85,4 +85,4 @@ void AddressTakenAnalysis::getAnalysisUsage(llvm::AnalysisUsage &AU) const {
 }
 
 char AddressTakenAnalysis::ID;
-static RegisterPass<AddressTakenAnalysis> A("ata", "Identify Address Taken Functions");
+static RegisterPass<AddressTakenAnalysis> A("ata", "Identify Address Taken Functions", true, true);

@@ -29,10 +29,10 @@ using namespace llvm;
 
 namespace {
   RegisterPass<TDDataStructures>   // Register the pass
-  Y("dsa-td", "Top-down Data Structure Analysis");
+  Y("dsa-td", "Top-down Data Structure Analysis", true, true);
 
   RegisterPass<EQTDDataStructures>   // Register the pass
-  Z("dsa-eqtd", "EQ Top-down Data Structure Analysis");
+  Z("dsa-eqtd", "EQ Top-down Data Structure Analysis", true, true);
 
   STATISTIC (NumTDInlines, "Number of graphs inlined");
 }

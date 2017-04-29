@@ -25,9 +25,9 @@
 #include "llvm/ADT/Statistic.h"
 
 static RegisterPass<dsa::TypeSafety<EQTDDataStructures> >
-X ("typesafety-eqtd", "Find type-safe pointers");
+X ("typesafety-eqtd", "Find type-safe pointers", true, true);
 static RegisterPass<dsa::TypeSafety<TDDataStructures> >
-Y ("typesafety-td", "Find type-safe pointers");
+Y ("typesafety-td", "Find type-safe pointers", true, true);
 
 // Pass Statistics
 namespace {

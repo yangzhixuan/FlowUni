@@ -99,4 +99,4 @@ bool EntryPointAnalysis::isEntryPoint(const llvm::Function* F) const {
 
 
 char EntryPointAnalysis::ID;
-static RegisterPass<EntryPointAnalysis> A("epa", "Identify EntryPoints");
+static RegisterPass<EntryPointAnalysis> A("epa", "Identify EntryPoints", true, true);

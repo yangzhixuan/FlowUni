@@ -32,7 +32,7 @@
 using namespace llvm;
 
 static RegisterPass<StdLibDataStructures>
-X("dsa-stdlib", "Standard Library Local Data Structure Analysis");
+X("dsa-stdlib", "Standard Library Local Data Structure Analysis", true, true);
 
 STATISTIC(NumNodesFoldedInStdLib,    "Number of nodes folded in std lib");
 

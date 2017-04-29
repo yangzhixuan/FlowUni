@@ -24,7 +24,7 @@ using namespace llvm;
 
 namespace {
   RegisterPass<CompleteBUDataStructures>
-  X("dsa-cbu", "'Complete' Bottom-up Data Structure Analysis");
+  X("dsa-cbu", "'Complete' Bottom-up Data Structure Analysis", true, true);
 }
 
 char CompleteBUDataStructures::ID;

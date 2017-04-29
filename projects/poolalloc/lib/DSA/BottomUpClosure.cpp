@@ -37,7 +37,7 @@ namespace {
   STATISTIC (NumRecalculationsSkipped, "Number of DSGraph recalculations skipped");
 
   RegisterPass<BUDataStructures>
-  X("dsa-bu", "Bottom-up Data Structure Analysis");
+  X("dsa-bu", "Bottom-up Data Structure Analysis", true, true);
 }
 
 char BUDataStructures::ID;

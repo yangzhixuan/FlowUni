@@ -438,6 +438,7 @@ public:
   void dump() const;
   void dumpParentGraph() const;
   void dumpFuncs();
+  std::string getCaption();
 
   void assertOK() const;
 

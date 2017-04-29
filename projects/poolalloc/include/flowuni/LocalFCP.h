@@ -84,11 +84,11 @@ namespace llvm {
   DeltaPointToGraph make_pointTo(Value *x, Value *y);
   DeltaPointToGraph make_merge(Value *x, Value *y);
 
-  struct LocalFCP: public FunctionPass {
-    static char ID;
-    void getAnalysisUsage(AnalysisUsage &AU) const override;
-    bool runOnFunction(Function &F) override;
-    LocalFCP();
+
+  struct LocalFCP {
+    friend struct LocalFCPWrapper;
+
+    bool runOnFunction(Function &F);
 
     // Get (a element of) the resource equivalent class pointed by 'x' if exists.
     // Return nullptr otherwise.
@@ -161,6 +161,19 @@ namespace llvm {
     // Generate summary at returning points.
     void generateSummary();
   };
+
+  struct LocalFCPWrapper: public ModulePass {
+    static char ID;
+    LocalFCPWrapper();
+    void getAnalysisUsage(AnalysisUsage &AU) const override;
+    bool runOnModule(Module& M) override;
+
+    std::unordered_map<Function*, LocalFCP> localFCP;
+
+  private:
+    LocalFCP inner;
+  };
+
 
 }
 

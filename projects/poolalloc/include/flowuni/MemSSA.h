@@ -20,11 +20,10 @@
 
 namespace llvm {
 
-  struct LocalMemSSA: public FunctionPass {
-    static char ID;
-    LocalMemSSA();
-    void getAnalysisUsage(AnalysisUsage &AU) const override;
-    bool runOnFunction(Function &F) override;
+  struct LocalMemSSA {
+    friend struct LocalMemSSAWrapper;
+
+    bool runOnFunction(Function &F);
 
     // Maps each StoreInst/CallInst to its users
     std::unordered_map<Instruction*, std::unordered_set<Instruction*>> memSSAUsers;
@@ -34,6 +33,36 @@ namespace llvm {
 
     // For each BasicBlock, maps each memory object to its fake phi-node, if exists
     std::unordered_map<BasicBlock*, std::unordered_map<DSNode*, PHINode*>> phiNodes;
+
+    // DSNode* for all arguments, including explicit arguments (formal arguments)
+    // and implicit arguments (memory objects reachable from explicit arguments).
+    std::unordered_set<DSNode*> arguments;
+
+    std::unordered_set<DSNode*> globals;
+
+    // For all arguments (both explicit and implicit), there is a fake phi inst for merging incoming values.
+    std::unordered_map<DSNode*, PHINode*> argIncomingMergePoint;
+    // For each argument, record the 'last definition' of it when returning, so that we can splice memory SSA
+    // of several functions in the inter-procedural phase.
+    std::unordered_map<DSNode*, Instruction*> argRetLastDef;
+
+    // Globals are similar to arguments, but we sacrificed their sparsity for simplicity so that they are tracked together.
+    PHINode* globalsIncomingMergePoint;
+    Instruction* globalsRetLastDef;
+
+    // For all memory objects reachable from the pointer returned by the 'ReturnInst', we record the last
+    // definition of it so that we can splice the memory SSA together in the inter-procedural phase.
+    std::unordered_set<DSNode*> returnedMem;
+    std::unordered_map<DSNode*, Instruction*> retMemLastDef;
+
+    // For each function call and each of the argument being passed by the CallInst, there is a fake phi inst for
+    // returning from the callee.
+    std::unordered_map<CallInst*, std::unordered_map<DSNode*, PHINode*>> callRetArgsMergePoints;
+    std::unordered_map<CallInst*, PHINode*> callRetGlobalMergePoint;
+
+    std::unordered_map<CallInst*, std::unordered_map<DSNode*, Instruction*>> callArgLastDef;
+    std::unordered_map<CallInst*, Instruction*> callGlobalLastDef;
+
 
     // Dump the memory SSA results as a DOT graph file
     void dump();
@@ -76,8 +105,7 @@ namespace llvm {
     std::unordered_set<DSNode*> memObjects;
 
     // Information of required passes.
-    LocalDataStructures *localDSA;
-    EquivBUDataStructures *buDSA;
+    LocalDataStructures *dsa;
     DominanceFrontier *domFrontiers;
     DominatorTree *domTree;
     DSGraph *dsgraph;
@@ -93,9 +121,21 @@ namespace llvm {
 
     // Clear between functions
     void clear();
+
+    static DSNode* GlobalsLeader;
   };
 
+  struct LocalMemSSAWrapper : public ModulePass {
+    static char ID;
+    LocalMemSSAWrapper();
+    void getAnalysisUsage(AnalysisUsage &AU) const override;
+    bool runOnModule(Module &M) override;
 
+    std::unordered_map<Function*, LocalMemSSA> ssa;
+
+  private:
+    LocalMemSSA localMemSSA;
+  };
 }
 
 #endif //POOLALLOC_FLOWUNI_H

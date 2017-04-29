@@ -157,7 +157,7 @@ void LocalMemSSA::dump(){
 
   // Output all DSNode* as nodes
   for(auto n : memObjects) {
-    of << indent << string_format("%s;\n", nodeName(n).c_str());
+    of << indent << string_format("%s[label=\"%s\"];\n", nodeName(n).c_str(), n->getCaption().c_str());
   }
 
   // All DSNodes form a subgraph

@@ -11,20 +11,34 @@ using namespace llvm;
 
 
 namespace{
-  static RegisterPass<LocalFCP> X("flowuni", "Flow-sensitive unification based points-to anlaysis", false, false);
+  static RegisterPass<LocalFCPWrapper> X("flowuni-local", "Flow-sensitive unification based points-to analysis", true, true);
 }
 
 
-char LocalFCP::ID = 0;
 
-LocalFCP::LocalFCP() : FunctionPass(ID) {
+char LocalFCPWrapper::ID = 0;
+
+LocalFCPWrapper::LocalFCPWrapper() : ModulePass(ID) {
 
 }
 
-void LocalFCP::getAnalysisUsage(AnalysisUsage &AU) const {
+void LocalFCPWrapper::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
-  AU.addRequired<LocalMemSSA>();
+  AU.addRequired<LocalMemSSAWrapper>();
 }
+
+bool LocalFCPWrapper::runOnModule(Module &M) {
+  auto localSSA = &getAnalysis<LocalMemSSAWrapper>();
+  for(auto& F : M) {
+    if(F.isDeclaration() == false) {
+      inner.memSSA = &(localSSA->ssa[&F]);
+      inner.func = &F;
+      inner.runOnFunction(F);
+    }
+  }
+  return false;
+}
+
 
 void LocalFCP::clear() {
   dataIn.clear();
@@ -39,16 +53,14 @@ void LocalFCP::clear() {
   dataOutDelta.clear();
   dataOutInDiff.clear();
   resources.clear();
-  memSSA = nullptr;
   implicitArgsPointedBy.clear();
   externalResources.clear();
   summary = PointToGraph();
 }
 
 bool LocalFCP::runOnFunction(Function &F) {
+  errs() << "\nrun LocalFCP on: " << F.getName() << "\n";
   clear();
-  memSSA = &getAnalysis<LocalMemSSA>();
-  func = &F;
 
   identifyResources();
 
@@ -123,7 +135,7 @@ bool LocalFCP::runOnFunction(Function &F) {
   std::unordered_set<BasicBlock*> __visitedBB;
   initWorkListDomOrder(&F.getEntryBlock(), __visitedBB);
 
- #define __DBGFCP
+ //#define __DBGFCP
 #ifdef __DBGFCP
   for(auto inst : DUGNodes) {
     errs() << "Predecessor of " << *inst << ":\n";
@@ -210,7 +222,9 @@ bool LocalFCP::runOnFunction(Function &F) {
         assert(externalResources.count(ptrMem) > 0 && "Non-external memory objects should always points to something");
 
         ptrTo = getImplicitArgOf(ptrMem);
+#ifdef __DBGFCP
         errs() << "get implicit argument at " << *inst << ", for " << PointToGraph::escape(ptrMem) << ", result: " << PointToGraph::escape(ptrTo) << "\n";
+#endif
 
         in.setPointTo(ptrMem, ptrTo);
         outDelta.push_back(make_pointTo(ptrMem, ptrTo));
@@ -325,7 +339,7 @@ bool LocalFCP::runOnFunction(Function &F) {
       }
     } else if(auto ret = dyn_cast<ReturnInst>(inst)) {
       Value *retPtr = ret->getReturnValue();
-      if(retPtr->getType()->isPointerTy()) {
+      if(retPtr && retPtr->getType()->isPointerTy()) {
         auto retMem = getMemObjectsForVal(retPtr);
         in.valPointTo = retMem;
       }

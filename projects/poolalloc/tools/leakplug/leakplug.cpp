@@ -29,6 +29,7 @@
 #include <memory>
 #include "flowuni/MemSSA.h"
 #include "flowuni/LocalFCP.h"
+#include "flowuni/BuFCP.h"
 
 using namespace llvm;
 
@@ -90,8 +91,10 @@ int main(int argc, const char *argv[])
 //    Passes.add(new TDDataStructures());
 //    Passes.add(new EQTDDataStructures());
     // Passes.add(new leakplug::LeakPlug());
-    Passes.add(new LocalMemSSA());
-    Passes.add(new LocalFCP());
+    Passes.add(new LocalMemSSAWrapper());
+    Passes.add(new LocalFCPWrapper());
+    Passes.add(new BuFCP());
+
 
     // Verify the final result
     Passes.add(createVerifierPass());

@@ -18,22 +18,45 @@
 using namespace llvm;
 
 namespace{
-  static RegisterPass<LocalMemSSA> X("localMemSSA", "Intraprocedural memory SSA based on Data Structure Analysis", false, false);
+  static RegisterPass<LocalMemSSAWrapper> X("localMemSSA", "Intraprocedural memory SSA based on Data Structure Analysis", true, true);
 }
 
 
-char LocalMemSSA::ID = 0;
+char LocalMemSSAWrapper::ID = 0;
 
-LocalMemSSA::LocalMemSSA() : FunctionPass(ID) {
+LocalMemSSAWrapper::LocalMemSSAWrapper() : ModulePass(ID) {
 
 }
 
-void LocalMemSSA::getAnalysisUsage(AnalysisUsage &AU) const {
+void LocalMemSSAWrapper::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
   AU.addRequired<LocalDataStructures>();
   AU.addRequired<EquivBUDataStructures>();
   AU.addRequired<DominanceFrontier>();
   AU.addRequired<DominatorTreeWrapperPass>();
+}
+
+bool LocalMemSSAWrapper::runOnModule(Module &M) {
+
+#define __DBG_MEMSSA
+
+#ifdef __DBG_MEMSSA
+  localMemSSA.dsa = &getAnalysis<LocalDataStructures>();
+  localMemSSA.dsa->print(errs(), &M);
+#endif
+  for(auto& F: M) {
+    if(F.isDeclaration() == false) {
+      localMemSSA.func = &F;
+      localMemSSA.dsa = &getAnalysis<LocalDataStructures>();
+      localMemSSA.dsgraph = localMemSSA.dsa->getDSGraph(F);
+      localMemSSA.domFrontiers = &getAnalysis<DominanceFrontier>(F);
+      localMemSSA.domTree = &(getAnalysis<DominatorTreeWrapperPass>(F).getDomTree());
+
+      localMemSSA.runOnFunction(F);
+      ssa[&F] = localMemSSA;
+    }
+  }
+  return false;
 }
 
 namespace {
@@ -67,25 +90,44 @@ void LocalMemSSA::clear() {
   phiNodes.clear();
   memModifiedByCall.clear();
   memObjects.clear();
+  arguments.clear();
+  globals.clear();
+  argIncomingMergePoint.clear();
+  globalsIncomingMergePoint = nullptr;
+  callRetGlobalMergePoint.clear();
+  callRetArgsMergePoints.clear();
+  callArgLastDef.clear();
+  callGlobalLastDef.clear();
+  returnedMem.clear();
+  retMemLastDef.clear();
 }
+
+DSNode* LocalMemSSA::GlobalsLeader = (DSNode*) "virtual DSNode for globals";
 
 bool LocalMemSSA::runOnFunction(Function &F) {
   clear();
 
-  func = &F;
-  localDSA = &getAnalysis<LocalDataStructures>();
-  buDSA = &getAnalysis<EquivBUDataStructures>();
-  dsgraph = localDSA->getDSGraph(F);
-  domFrontiers = &getAnalysis<DominanceFrontier>();
-  domTree = &(getAnalysis<DominatorTreeWrapperPass>().getDomTree());
-
-  errs() << "\n" << "Analysis on: " << F.getName() << "\n";
+  errs() << "Building LocalMemSSA on: " << F.getName() << "\n";
 
   for(auto ite = dsgraph->node_begin(); ite != dsgraph->node_end(); ite++) {
     memObjects.insert(&*ite);
   }
 
-// #define __DBG_MEMSSA
+  for(auto node_ite = dsgraph->node_begin(); node_ite != dsgraph->node_end(); node_ite++) {
+    if (node_ite->isGlobalNode()) {
+      globals.insert(&*node_ite);
+
+      auto reachable = reachableDSNodes(&*node_ite);
+      for(DSNode* m: reachable) {
+        globals.insert(m);
+      }
+    }
+  }
+
+#ifdef __DBG_MEMSSA
+  errs() << "Globals size: " << globals.size() << "\n";
+#endif
+
 
   // For each load/store instruction, build an SSA form from the results of DSA.
 
@@ -100,6 +142,12 @@ bool LocalMemSSA::runOnFunction(Function &F) {
         if(aliasResource(ptr)) {
           // this StoreInst modifies a memory object aliasing our 'resources'
           DSNode *n = dsgraph->getNodeForValue(ptr).getNode();
+
+          // We track all global DSNodes together so that we replace all of them with the static constant GlobalsLeader.
+          if(globals.count(n) > 0) {
+            n = GlobalsLeader;
+          }
+
           for(auto frontier : frontiers) {
             if(phiNodes[frontier].count(n) == 0) {
               phiNodes[frontier][n] = PHINode::Create( Type::getVoidTy(F.getContext()), 0, "", &*(frontier->begin()));
@@ -112,6 +160,12 @@ bool LocalMemSSA::runOnFunction(Function &F) {
         Value *ptr = alloca;
         if(aliasResource(ptr)) {
           DSNode *n = dsgraph->getNodeForValue(ptr).getNode();
+
+          // We track all global DSNodes together so that we replace all of them with the static constant GlobalsLeader.
+          if(globals.count(n) > 0) {
+            n = GlobalsLeader;
+          }
+
           for(auto frontier : frontiers) {
             if(phiNodes[frontier].count(n) == 0) {
               phiNodes[frontier][n] = PHINode::Create( Type::getVoidTy(F.getContext()), 0, "", &*(frontier->begin()));
@@ -120,22 +174,53 @@ bool LocalMemSSA::runOnFunction(Function &F) {
         }
       } else if(CallInst* call = dyn_cast<CallInst>(&*inst_ite)) {
         // Function calls are treated modifying all resources reachable from their arguments.
+
+        // Traverse from arguments to all reachable DSNode-s. Treating this CallInst modifies
+        // all these DSNode-s.
+        auto& memModified = memModifiedByCall[call];
         for(auto &arg : call->arg_operands()) {
           Value *ptr = arg.get();
           if(dsgraph->hasNodeForValue(ptr)) {
             DSNode *n = dsgraph->getNodeForValue(ptr).getNode();
-            // Traverse from 'n' to all reachable DSNode-s from 'n'. Treating this CallInst modifies all these
-            // DSNode-s.
             std::set<DSNode*> reachable = reachableDSNodes(n);
-            auto& memModified = memModifiedByCall[call];
             for(auto n : reachable) {
               if(memObjects.count(n) > 0) {
-                memModified.insert(n);
-                for(auto frontier : frontiers) {
-                  if(phiNodes[frontier].count(n) == 0) {
-                    phiNodes[frontier][n] = PHINode::Create( Type::getVoidTy(F.getContext()), 0, "", &*(frontier->begin()));
-                  }
+                if(globals.count(n) > 0) {
+                  continue;
                 }
+                memModified.insert(n);
+              }
+            }
+          }
+        }
+
+        if(dsgraph->hasNodeForValue(call)) {
+          DSNode *n = dsgraph->getNodeForValue(call).getNode();
+          auto reachable = reachableDSNodes(n);
+
+          for (DSNode *n : reachable) {
+            if(globals.count(n) > 0) {
+              continue;
+            }
+            memModified.insert(n);
+          }
+        }
+
+        for(DSNode *n : memModified) {
+          for(auto frontier : frontiers) {
+            if(phiNodes[frontier].count(n) == 0) {
+              phiNodes[frontier][n] = PHINode::Create( Type::getVoidTy(F.getContext()), 0, "", &*(frontier->begin()));
+            }
+          }
+        }
+      } else if(ReturnInst* ret = dyn_cast<ReturnInst>(&*inst_ite)) {
+        if(Value *retPtr = ret->getReturnValue()) {
+          if(dsgraph->hasNodeForValue(retPtr)) {
+            DSNode *n = dsgraph->getNodeForValue(retPtr).getNode();
+            auto reachable = reachableDSNodes(n);
+            for(DSNode *n : reachable) {
+              if(globals.count(n) == 0) {
+                returnedMem.insert(n);
               }
             }
           }
@@ -179,8 +264,45 @@ bool LocalMemSSA::runOnFunction(Function &F) {
   errs() <<"}\n";
 #endif
 
-  // Step2. resolve all def-use relations of SSA form.
+  // Identify explicit and implicit arguments and create merge points for them.
+  for(auto& arg : F.args()) {
+    if(dsgraph->hasNodeForValue(&arg)) {
+      DSNode *n = dsgraph->getNodeForValue(&arg).getNode();
+      std::set<DSNode*> reachable = reachableDSNodes(n);
+      for(auto& i : reachable) {
+        // Globals are tracked separately with arguments.
+        if(globals.count(n) == 0) {
+          arguments.insert(i);
+        }
+      }
+    }
+  }
+  for(auto arg : arguments) {
+    argIncomingMergePoint[arg] = PHINode::Create( Type::getVoidTy(F.getContext()), 0, "", &*F.getEntryBlock().begin());
+  }
+  globalsIncomingMergePoint = PHINode::Create( Type::getVoidTy(F.getContext()), 0, "", &*F.getEntryBlock().begin());
+
+  // Create merge points for returning from function calls.
+  for(auto inst_ite = inst_begin(F); inst_ite != inst_end(F); inst_ite++) {
+    if(auto call = dyn_cast<CallInst>(&*inst_ite)) {
+      auto& retMergePoint = callRetArgsMergePoints[call];
+      for(DSNode *n : memModifiedByCall[call]) {
+        retMergePoint[n] = PHINode::Create( Type::getVoidTy(F.getContext()), 0, "", call);
+      }
+      callRetGlobalMergePoint[call] = PHINode::Create( Type::getVoidTy(F.getContext()), 0, "", call);
+    }
+  }
+
+  // Step2. resolve all def-use relations of the SSA form.
+
   std::map<DSNode*, std::vector<Instruction*>> lastDef;
+
+  for(DSNode* arg : arguments) {
+    PHINode *phi = argIncomingMergePoint[arg];
+    lastDef[arg].push_back(phi);
+  }
+  lastDef[GlobalsLeader].push_back(globalsIncomingMergePoint);
+
   buildSSARenaming(lastDef, &F.getEntryBlock());
 
   // Build reverse graph for convenience.
@@ -217,11 +339,16 @@ void LocalMemSSA::buildSSARenaming(std::map<DSNode *, std::vector<Instruction *>
       if(aliasResource(ptr)) {
         DSNode *n = dsgraph->getNodeForValue(ptr).getNode();
 
-        // Reads an old
-        if(lastDef[n].size() > 0) {
-          Instruction *def = lastDef[n].back();
-          memSSAUsers[def].insert(store);
+        // We track all global DSNodes together so that we replace all of them with the static constant GlobalsLeader.
+        if(globals.count(n) > 0) {
+          n = GlobalsLeader;
         }
+
+        // Reads an old
+        assert(lastDef[n].size() > 0 && "Stored location should have a definition");
+
+        Instruction *def = lastDef[n].back();
+        memSSAUsers[def].insert(store);
 
         // Defines a new
         lastDef[n].push_back(store);
@@ -233,7 +360,12 @@ void LocalMemSSA::buildSSARenaming(std::map<DSNode *, std::vector<Instruction *>
       if(aliasResource(ptr)) {
         DSNode *n = dsgraph->getNodeForValue(ptr).getNode();
 
-        // Reads an old
+        // We track all global DSNodes together so that we replace all of them with the static constant GlobalsLeader.
+        if(globals.count(n) > 0) {
+          n = GlobalsLeader;
+        }
+
+        // Reads an old if exists
         if(lastDef[n].size() > 0) {
           Instruction *def = lastDef[n].back();
           memSSAUsers[def].insert(alloca);
@@ -245,15 +377,26 @@ void LocalMemSSA::buildSSARenaming(std::map<DSNode *, std::vector<Instruction *>
       }
     } else if(auto call = dyn_cast<CallInst>(&*inst_ite)) {
       if(memModifiedByCall.count(call) > 0) {
+        auto& argLastDef = callArgLastDef[call];
+        auto& argRetMerge = callRetArgsMergePoints[call];
+
         for(DSNode *n : memModifiedByCall[call]) {
-          // Reads old
+          assert(argRetMerge.count(n) > 0);
+
+          // Record current 'lastDef' so that we can splice callsite and callee in
+          // the inter-procedural phase.
+
           if(lastDef[n].size() > 0) {
             Instruction *def = lastDef[n].back();
-            memSSAUsers[def].insert(call);
+            argLastDef[n] = def;
+            memSSAUsers[def].insert(argRetMerge[n]);
+          } else {
+            // 'n' may be returned by the call, so it may don't have a previous definition.
           }
 
-          // Defines new
-          lastDef[n].push_back(call);
+          // 'lastDef'-s are also connected with the returning merge point so that
+          // we can do intra-procedural analysis (function calls are treated as identity functions).
+          lastDef[n].push_back(argRetMerge[n]);
           stackCount[n] += 1;
         }
       }
@@ -262,19 +405,31 @@ void LocalMemSSA::buildSSARenaming(std::map<DSNode *, std::vector<Instruction *>
       if(aliasResource(ptr)) {
         DSNode *n = dsgraph->getNodeForValue(ptr).getNode();
 
-        // Reads a old
-        if(lastDef.count(n) > 0 && lastDef[n].size() > 0) {
-          Instruction *def = lastDef[n].back();
-          memSSAUsers[def].insert(load);
+        // We track all global DSNodes together so that we replace all of them with the static constant GlobalsLeader.
+        if(globals.count(n) > 0) {
+          n = GlobalsLeader;
         }
+
+        // Reads an old
+        assert(lastDef[n].size() > 0);
+        Instruction *def = lastDef[n].back();
+        memSSAUsers[def].insert(load);
       }
     } else if(auto ret = dyn_cast<ReturnInst>(&*inst_ite)) {
-      // Return is treated as read all possible resources so that information for
-      // all resources can be merged here.
-      for(const auto& n_defs : lastDef) {
-        Instruction *def = n_defs.second.back();
-        memSSAUsers[def].insert(ret);
+      // For each argument, record the 'last definition' of it when returning, so that we can splice memory SSA
+      // of several functions in the inter-procedural phase.
+      for(DSNode* n : arguments) {
+        assert(lastDef[n].size() > 0);
+        argRetLastDef[n] = lastDef[n].back();
       }
+
+      for(DSNode* n : returnedMem) {
+        assert(lastDef[n].size() > 0);
+        retMemLastDef[n] = lastDef[n].back();
+      }
+
+      assert(lastDef[GlobalsLeader].size() > 0);
+      globalsRetLastDef = lastDef[GlobalsLeader].back();
     }
   }
 
@@ -328,6 +483,21 @@ void LocalMemSSA::hidePhiNodes() {
       np.second->removeFromParent();
     }
   }
+
+  for(auto& kv : argIncomingMergePoint) {
+    kv.second->removeFromParent();
+  }
+
+  globalsIncomingMergePoint->removeFromParent();
+
+  for(auto& kv : callRetArgsMergePoints) {
+    for(auto& np : kv.second) {
+      np.second->removeFromParent();
+    }
+  }
+  for(auto& kv : callRetGlobalMergePoint) {
+    kv.second->removeFromParent();
+  }
 }
 
 void LocalMemSSA::showPhiNodes() {
@@ -335,6 +505,22 @@ void LocalMemSSA::showPhiNodes() {
     for(const auto& np: kv.second) {
       kv.first->getInstList().insert(kv.first->getFirstInsertionPt(), np.second);
     }
+  }
+
+  for(auto& kv : argIncomingMergePoint) {
+    func->getEntryBlock().getInstList().insert(func->getEntryBlock().getFirstInsertionPt(), kv.second);
+  }
+
+  func->getEntryBlock().getInstList().insert(func->getEntryBlock().getFirstInsertionPt(), globalsIncomingMergePoint);
+
+  for(auto& kv : callRetArgsMergePoints) {
+    for(auto& np : kv.second) {
+      kv.first->getParent()->getInstList().insert(kv.first->getParent()->getFirstInsertionPt(), np.second);
+    }
+  }
+
+  for(auto& kv : callRetGlobalMergePoint) {
+    kv.first->getParent()->getInstList().insert(kv.first->getParent()->getFirstInsertionPt(), kv.second);
   }
 }
 

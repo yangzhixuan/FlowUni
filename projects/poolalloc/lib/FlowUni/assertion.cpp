@@ -31,6 +31,10 @@ void LocalFCP::checkAssertions() {
   for(auto ite = inst_begin(func); ite != inst_end(func); ite++) {
     Instruction *inst = &*ite;
     if(auto call = dyn_cast<CallInst>(inst)) {
+      if(call->getCalledFunction() == nullptr) {
+        // Skip indirect call.
+        continue;
+      }
       std::string funcName = call->getCalledFunction()->getName();
       if(funcName == "__may_pointTo" || funcName == "__may_pointTo_exactly"
           || funcName == "__print_pointTo") {

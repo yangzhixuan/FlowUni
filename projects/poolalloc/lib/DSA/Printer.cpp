@@ -303,6 +303,10 @@ struct DOTGraphTraits<const DSGraph*> : public DefaultDOTGraphTraits {
 };
 }   // end namespace llvm
 
+std::string DSNode::getCaption() {
+  return ::getCaption(this, this->getParentGraph());
+}
+
 void DSNode::print(llvm::raw_ostream &O, const DSGraph *G) const {
   GraphWriter<const DSGraph *> W(O, G, false);
   W.writeNode(this);

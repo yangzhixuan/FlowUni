@@ -91,7 +91,7 @@ namespace {
     void print(llvm::raw_ostream &O, const Module* = 0) const { }
   };
 
-  static RegisterPass<DSGraphStats> Z("dsstats", "DS Graph Statistics");
+  static RegisterPass<DSGraphStats> Z("dsstats", "DS Graph Statistics", true, true);
 }
 
 char DSGraphStats::ID;

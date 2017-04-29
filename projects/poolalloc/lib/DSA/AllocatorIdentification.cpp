@@ -195,4 +195,4 @@ void AllocIdentify::getAnalysisUsage(AnalysisUsage &AU) const {
 
 char AllocIdentify::ID = 0;
 static RegisterPass<AllocIdentify>
-X("alloc-identify", "Identify allocator wrapper functions");
+X("alloc-identify", "Identify allocator wrapper functions", true, true);

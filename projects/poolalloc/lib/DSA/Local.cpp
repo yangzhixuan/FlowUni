@@ -54,7 +54,7 @@ STATISTIC(NumBoringIntToPtr, "Number of inttoptr used only in cmp");
 STATISTIC(NumIgnoredInst,       "Number of instructions ignored");
 
 RegisterPass<LocalDataStructures>
-X("dsa-local", "Local Data Structure Analysis");
+X("dsa-local", "Local Data Structure Analysis", true, true);
 
 cl::opt<std::string> hasMagicSections("dsa-magic-sections",
         cl::desc("File with section to global mapping")); //, cl::ReallyHidden);

@@ -28,7 +28,7 @@
 using namespace llvm;
 
 static RegisterPass<BasicDataStructures>
-X("dsa-basic", "Basic Data Structure Analysis(No Analysis)");
+X("dsa-basic", "Basic Data Structure Analysis(No Analysis)", true, true);
 
 char BasicDataStructures::ID = 0;
 

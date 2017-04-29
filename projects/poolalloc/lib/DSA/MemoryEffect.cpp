@@ -26,7 +26,7 @@ using namespace llvm;
 
 namespace {
   RegisterPass<MemoryEffectAnalysis> X("effect",
-                    "Memory Effect Analysis");
+                    "Memory Effect Analysis", true, true);
 }
 char MemoryEffectAnalysis::ID = 0;
 

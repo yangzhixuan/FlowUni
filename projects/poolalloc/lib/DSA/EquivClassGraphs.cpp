@@ -32,7 +32,7 @@ using namespace llvm;
 
 namespace {
   RegisterPass<EquivBUDataStructures> X("dsa-eq",
-                    "Equivalence-class Bottom-up Data Structure Analysis");
+                    "Equivalence-class Bottom-up Data Structure Analysis", true, true);
 }
 char EquivBUDataStructures::ID = 0;
 

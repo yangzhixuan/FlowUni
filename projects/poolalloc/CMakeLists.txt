@@ -52,7 +52,7 @@ set(SOURCE_FILES
 
     #FlowUni
     lib/FlowUni/Makefile
-        include/flowuni/MemSSA.h lib/FlowUni/MemSSA.cpp lib/FlowUni/dump.cpp include/flowuni/LocalFCP.h lib/FlowUni/LocalFCP.cpp lib/FlowUni/assertion.cpp)
+        include/flowuni/MemSSA.h lib/FlowUni/MemSSA.cpp lib/FlowUni/dump.cpp include/flowuni/LocalFCP.h lib/FlowUni/LocalFCP.cpp lib/FlowUni/assertion.cpp include/flowuni/BuFCP.h lib/FlowUni/BuFCP.cpp)
 
 add_executable(poolalloc ${SOURCE_FILES})
 include_directories(include)
