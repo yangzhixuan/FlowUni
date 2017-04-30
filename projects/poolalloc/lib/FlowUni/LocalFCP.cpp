@@ -88,6 +88,17 @@ bool LocalFCP::runOnFunction(Function &F) {
     }
   }
 
+  for(const auto& kv : memSSA->argIncomingMergePoint) {
+    DUGNodes.insert(kv.second);
+  }
+  DUGNodes.insert(memSSA->globalsIncomingMergePoint);
+  for(const auto& kv : memSSA->callRetArgsMergePoints) {
+    for(const auto& np : kv.second) {
+      DUGNodes.insert(np.second);
+    }
+  }
+
+
   // We don't care about storing/loading a non-pointer value. Remove these instructions.
   for(auto ite = DUGNodes.begin(); ite != DUGNodes.end(); ) {
     bool removed = false;
@@ -133,6 +144,13 @@ bool LocalFCP::runOnFunction(Function &F) {
   // to guarantee for every instruction in the iteration process, its used Values were
   // calculated at least once.
   std::unordered_set<BasicBlock*> __visitedBB;
+  for(const auto& kv : memSSA->argIncomingMergePoint) {
+    worklist.push(kv.second);
+    inList.insert(kv.second);
+  }
+  worklist.push(memSSA->globalsIncomingMergePoint);
+  inList.insert(memSSA->globalsIncomingMergePoint);
+
   initWorkListDomOrder(&F.getEntryBlock(), __visitedBB);
 
  //#define __DBGFCP
@@ -624,6 +642,14 @@ void LocalFCP::initWorkListDomOrder(BasicBlock *bb, std::unordered_set<BasicBloc
   }
   for(auto& I : *bb) {
     Instruction *inst = &I;
+    if(auto call = dyn_cast<CallInst>(inst)) {
+      if(memSSA->callRetArgsMergePoints.count(call) > 0) {
+        for(const auto& np : memSSA->callRetArgsMergePoints[call]) {
+          worklist.push(np.second);
+          inList.insert(np.second);
+        }
+      }
+    }
     if(DUGNodes.count(inst) > 0) {
       worklist.push(inst);
       inList.insert(inst);

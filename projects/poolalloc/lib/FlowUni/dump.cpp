@@ -130,7 +130,7 @@ void LocalMemSSA::dump(){
     auto i2 = bb.begin();
     i2++;
     for(; i2 != bb.end(); i1++, i2++) {
-      of << indent << string_format("%s -> %s[style=invis];\n", nodeName(&*i1).c_str(), nodeName(&*i2).c_str());
+      of << indent << string_format("%s -> %s[color=grey];\n", nodeName(&*i1).c_str(), nodeName(&*i2).c_str());
 
     }
 
@@ -192,17 +192,56 @@ void LocalMemSSA::dump(){
         of << indent << string_format("%s -> %s[style=dotted];\n",
                                       nodeName(store).c_str(), nodeName(n).c_str());
       }
-    } else if(auto call = dyn_cast<CallInst>(addr)) {
+    }
+#if 0 // CallInsts are replaced by fake phi nodes.
+    else if(auto call = dyn_cast<CallInst>(addr)) {
       if(memModifiedByCall.count(call) > 0) {
         for(DSNode* n : memModifiedByCall[call]) {
-          of << indent << string_format("%s -> %s[style=dotted];\n",
-                                        nodeName(call).c_str(), nodeName(n).c_str());
+          // of << indent << string_format("%s -> %s[style=dotted];\n",
+          //                               nodeName(call).c_str(), nodeName(n).c_str());
         }
       }
-    } else if(auto alloca = dyn_cast<AllocaInst>(addr)) {
+    }
+#endif
+     else if(auto alloca = dyn_cast<AllocaInst>(addr)) {
       DSNode *n = dsgraph->getNodeForValue(alloca).getNode();
       of << indent << string_format("%s -> %s[style=dotted];\n",
                                     nodeName(n).c_str(), nodeName(alloca).c_str());
+    }
+  }
+
+  // Add edges between our fake phi nodes and corresponding DSNode.
+  for(const auto& kv : phiNodes) {
+    for(const auto& np: kv.second) {
+      of << indent << string_format("%s -> %s[style=dotted];\n",
+                                    nodeName(np.second).c_str(), nodeName(np.first).c_str());
+    }
+  }
+
+  of << indent << "//Hello\n";
+  for(auto& kv : argIncomingMergePoint) {
+    of << indent << string_format("%s -> %s[style=dotted];\n",
+                                  nodeName(kv.second).c_str(), nodeName(kv.first).c_str());
+  }
+
+  of << indent << "//World\n";
+  for(auto n : globals) {
+    of << indent << string_format("%s -> %s[style=dotted];\n",
+                                  nodeName(globalsIncomingMergePoint).c_str(), nodeName(n).c_str());
+  }
+
+  of << indent << "//Bar\n";
+  for(auto& kv : callRetArgsMergePoints) {
+    for(auto& np : kv.second) {
+      if(np.first == GlobalsLeader) {
+        for(auto n : globals) {
+          of << indent << string_format("%s -> %s[style=dotted];\n",
+                                        nodeName(np.second).c_str(), nodeName(n).c_str());
+        }
+      } else {
+        of << indent << string_format("%s -> %s[style=dotted];\n",
+                                      nodeName(np.second).c_str(), nodeName(np.first).c_str());
+      }
     }
   }
 

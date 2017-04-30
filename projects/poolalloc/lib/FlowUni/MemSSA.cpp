@@ -94,10 +94,8 @@ void LocalMemSSA::clear() {
   globals.clear();
   argIncomingMergePoint.clear();
   globalsIncomingMergePoint = nullptr;
-  callRetGlobalMergePoint.clear();
   callRetArgsMergePoints.clear();
   callArgLastDef.clear();
-  callGlobalLastDef.clear();
   returnedMem.clear();
   retMemLastDef.clear();
 }
@@ -206,6 +204,9 @@ bool LocalMemSSA::runOnFunction(Function &F) {
           }
         }
 
+        // Globals are always passed to callee.
+        memModified.insert(GlobalsLeader);
+
         for(DSNode *n : memModified) {
           for(auto frontier : frontiers) {
             if(phiNodes[frontier].count(n) == 0) {
@@ -289,7 +290,6 @@ bool LocalMemSSA::runOnFunction(Function &F) {
       for(DSNode *n : memModifiedByCall[call]) {
         retMergePoint[n] = PHINode::Create( Type::getVoidTy(F.getContext()), 0, "", call);
       }
-      callRetGlobalMergePoint[call] = PHINode::Create( Type::getVoidTy(F.getContext()), 0, "", call);
     }
   }
 
@@ -495,9 +495,6 @@ void LocalMemSSA::hidePhiNodes() {
       np.second->removeFromParent();
     }
   }
-  for(auto& kv : callRetGlobalMergePoint) {
-    kv.second->removeFromParent();
-  }
 }
 
 void LocalMemSSA::showPhiNodes() {
@@ -519,9 +516,6 @@ void LocalMemSSA::showPhiNodes() {
     }
   }
 
-  for(auto& kv : callRetGlobalMergePoint) {
-    kv.first->getParent()->getInstList().insert(kv.first->getParent()->getFirstInsertionPt(), kv.second);
-  }
 }
 
 #if 0 // Prepared to be removed

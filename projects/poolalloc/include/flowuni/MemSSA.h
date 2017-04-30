@@ -58,11 +58,7 @@ namespace llvm {
     // For each function call and each of the argument being passed by the CallInst, there is a fake phi inst for
     // returning from the callee.
     std::unordered_map<CallInst*, std::unordered_map<DSNode*, PHINode*>> callRetArgsMergePoints;
-    std::unordered_map<CallInst*, PHINode*> callRetGlobalMergePoint;
-
     std::unordered_map<CallInst*, std::unordered_map<DSNode*, Instruction*>> callArgLastDef;
-    std::unordered_map<CallInst*, Instruction*> callGlobalLastDef;
-
 
     // Dump the memory SSA results as a DOT graph file
     void dump();

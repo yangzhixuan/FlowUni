@@ -38,6 +38,7 @@ void LocalFCP::checkAssertions() {
       std::string funcName = call->getCalledFunction()->getName();
       if(funcName == "__may_pointTo" || funcName == "__may_pointTo_exactly"
           || funcName == "__print_pointTo") {
+
         std::unordered_set<Value*> ptrSet, checkedSet;
 
         Value *ptr = call->getArgOperand(0);
