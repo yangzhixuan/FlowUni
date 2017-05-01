@@ -123,10 +123,10 @@ namespace llvm {
     PointToGraph summary;
 
     // Dump the point-to graph as a DOT file.
-    void dump();
+    void dump(std::string fileName);
 
     // Dump the summary (point-to graph at returning points) as a DOT file.
-    void dumpSummary();
+    void dumpSummary(std::string fileName);
   private:
     std::queue<Instruction*> worklist;
     std::unordered_set<Instruction*> inList;
@@ -137,7 +137,6 @@ namespace llvm {
     std::unordered_map<Instruction*, std::vector<DeltaPointToGraph>> dataOutInDiff;
 
     LocalMemSSA *memSSA;
-    Function *func;
 
     // Clear between function
     void clear();
@@ -147,13 +146,27 @@ namespace llvm {
 
     // Push all DUGNodes to the worklist in an order consistent with the dominance order.
     // (If 'a' dominates 'b', then 'a' precedes 'b' in the initial worklist)
+    void initWorkListDomOrder(Function& F);
     void initWorkListDomOrder(BasicBlock *bb, std::unordered_set<BasicBlock*>& visited);
 
     // Check testing annotations in the code.
     void checkAssertions();
 
     // Identify resources not created by instructions, i.e. arguments & global variables.
-    void identifyResources();
+    void identifyResources(Function& F);
+
+    // Identify instructions should be considered in the data-flow analysis
+    void identifyDUGNodes(Function& F);
+    void identifyDUGEdges();
+
+    // Removing unnecessary nodes in the DUG. (NOT implemented yet)
+    void simplifyDUG();
+
+    // Iteratively apply the transform functions of the nodes in the DUG.
+    void chaosIterating();
+
+    // Apply dataOutInDiff to dataIn to compute dataOut.
+    void computeDataOut();
 
     // Get implicit argument
     Value *getImplicitArgOf(Value *x);
@@ -173,8 +186,6 @@ namespace llvm {
   private:
     LocalFCP inner;
   };
-
-
 }
 
 #endif //POOLALLOC_LOCALFCP_H

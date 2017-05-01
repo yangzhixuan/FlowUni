@@ -32,19 +32,20 @@ namespace llvm {
     BuFCP();
 
     // Map function to the number of the SCC the function belongs to.
-    std::unordered_map<const Function*, unsigned> funcSccNum;
+    std::unordered_map<const Function*, int> funcSccNum;
 
     // Number of SCC in the module.
-    unsigned sccCount;
+    int sccCount;
 
     // Map (the number of) SCC to a set of its members.
     std::vector<std::unordered_set<const Function*>> sccMember;
 
-
   private:
     EquivBUDataStructures* buDSA;
-
+    LocalMemSSAWrapper* memSSA;
     void clear();
+
+    void resolveInSccCalls(const Function*);
   };
 }
 

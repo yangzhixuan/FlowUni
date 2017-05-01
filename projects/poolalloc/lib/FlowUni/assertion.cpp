@@ -28,8 +28,8 @@ namespace {
 }
 
 void LocalFCP::checkAssertions() {
-  for(auto ite = inst_begin(func); ite != inst_end(func); ite++) {
-    Instruction *inst = &*ite;
+  for(auto ite = DUGNodes.begin(); ite != DUGNodes.end(); ite++) {
+    Instruction *inst = *ite;
     if(auto call = dyn_cast<CallInst>(inst)) {
       if(call->getCalledFunction() == nullptr) {
         // Skip indirect call.

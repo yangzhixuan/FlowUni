@@ -81,6 +81,7 @@ namespace {
 };
 
 void LocalMemSSA::dump(){
+  showPhiNodes();
   std::ofstream of;
   of.open("memSSA." + func->getName().str() + ".dot", std::fstream::out);
 
@@ -220,14 +221,15 @@ void LocalMemSSA::dump(){
 
   of << indent << "//Hello\n";
   for(auto& kv : argIncomingMergePoint) {
-    of << indent << string_format("%s -> %s[style=dotted];\n",
-                                  nodeName(kv.second).c_str(), nodeName(kv.first).c_str());
-  }
-
-  of << indent << "//World\n";
-  for(auto n : globals) {
-    of << indent << string_format("%s -> %s[style=dotted];\n",
-                                  nodeName(globalsIncomingMergePoint).c_str(), nodeName(n).c_str());
+    if(kv.first == GlobalsLeader) {
+      for(auto n : globals) {
+        of << indent << string_format("%s -> %s[style=dotted];\n",
+                                      nodeName(kv.second).c_str(), nodeName(n).c_str());
+      }
+    } else {
+      of << indent << string_format("%s -> %s[style=dotted];\n",
+                                    nodeName(kv.second).c_str(), nodeName(kv.first).c_str());
+    }
   }
 
   of << indent << "//Bar\n";
@@ -249,12 +251,14 @@ void LocalMemSSA::dump(){
   indent.dec();
 
   of.close();
+
+  hidePhiNodes();
 }
 
 
-void LocalFCP::dump() {
+void LocalFCP::dump(std::string fileName) {
   std::ofstream of;
-  of.open("localFCP." + func->getName().str() + ".dot", std::fstream::out);
+  of.open(fileName + ".dot", std::fstream::out);
 
   IndentLevel indent;
   of << "digraph {\n";
@@ -325,7 +329,7 @@ void LocalFCP::dump() {
   of.close();
 }
 
-void LocalFCP::dumpSummary() {
+void LocalFCP::dumpSummary(std::string fileName) {
   std::unordered_map<Value*, std::unordered_set<Value*>> partition;
   for(auto kv : summary.eqClass.leader) {
     auto leader = summary.eqClass.find(kv.first);
@@ -340,7 +344,7 @@ void LocalFCP::dumpSummary() {
   }
 
   std::ofstream of;
-  of.open("localFCP.sum." + func->getName().str() + ".dot", std::fstream::out);
+  of.open(fileName + ".dot", std::fstream::out);
 
   IndentLevel indent;
   of << "digraph {\n";

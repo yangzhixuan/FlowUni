@@ -34,25 +34,21 @@ namespace llvm {
     // For each BasicBlock, maps each memory object to its fake phi-node, if exists
     std::unordered_map<BasicBlock*, std::unordered_map<DSNode*, PHINode*>> phiNodes;
 
-    // DSNode* for all arguments, including explicit arguments (formal arguments)
+    // DSNodes for all arguments, including explicit arguments (formal arguments)
     // and implicit arguments (memory objects reachable from explicit arguments).
     std::unordered_set<DSNode*> arguments;
 
+    // DSNodes reachable from globals. They are tracked together for simplicity.
     std::unordered_set<DSNode*> globals;
+
+    // DSNodes reachable from the returned pointer.
+    std::unordered_set<DSNode*> returnedMem;
 
     // For all arguments (both explicit and implicit), there is a fake phi inst for merging incoming values.
     std::unordered_map<DSNode*, PHINode*> argIncomingMergePoint;
-    // For each argument, record the 'last definition' of it when returning, so that we can splice memory SSA
-    // of several functions in the inter-procedural phase.
-    std::unordered_map<DSNode*, Instruction*> argRetLastDef;
 
-    // Globals are similar to arguments, but we sacrificed their sparsity for simplicity so that they are tracked together.
-    PHINode* globalsIncomingMergePoint;
-    Instruction* globalsRetLastDef;
-
-    // For all memory objects reachable from the pointer returned by the 'ReturnInst', we record the last
+    // For all memory objects should be inlined into caller (returned pointer, arguments), we record the last
     // definition of it so that we can splice the memory SSA together in the inter-procedural phase.
-    std::unordered_set<DSNode*> returnedMem;
     std::unordered_map<DSNode*, Instruction*> retMemLastDef;
 
     // For each function call and each of the argument being passed by the CallInst, there is a fake phi inst for
@@ -101,7 +97,7 @@ namespace llvm {
     std::unordered_set<DSNode*> memObjects;
 
     // Information of required passes.
-    LocalDataStructures *dsa;
+    DataStructures *dsa;
     DominanceFrontier *domFrontiers;
     DominatorTree *domTree;
     DSGraph *dsgraph;
@@ -127,7 +123,7 @@ namespace llvm {
     void getAnalysisUsage(AnalysisUsage &AU) const override;
     bool runOnModule(Module &M) override;
 
-    std::unordered_map<Function*, LocalMemSSA> ssa;
+    std::unordered_map<const Function*, LocalMemSSA> ssa;
 
   private:
     LocalMemSSA localMemSSA;

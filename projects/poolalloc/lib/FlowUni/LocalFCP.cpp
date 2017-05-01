@@ -15,7 +15,6 @@ namespace{
 }
 
 
-
 char LocalFCPWrapper::ID = 0;
 
 LocalFCPWrapper::LocalFCPWrapper() : ModulePass(ID) {
@@ -31,9 +30,11 @@ bool LocalFCPWrapper::runOnModule(Module &M) {
   auto localSSA = &getAnalysis<LocalMemSSAWrapper>();
   for(auto& F : M) {
     if(F.isDeclaration() == false) {
-      inner.memSSA = &(localSSA->ssa[&F]);
-      inner.func = &F;
+      LocalMemSSA ssa = localSSA->ssa[&F];
+      inner.memSSA = &ssa;
+      //inner.memSSA = &(localSSA->ssa[&F]);
       inner.runOnFunction(F);
+      localFCP[&F] = inner;
     }
   }
   return false;
@@ -41,6 +42,7 @@ bool LocalFCPWrapper::runOnModule(Module &M) {
 
 
 void LocalFCP::clear() {
+  resources.clear();
   dataIn.clear();
   dataOut.clear();
   DUGNodes.clear();
@@ -52,7 +54,6 @@ void LocalFCP::clear() {
   inList.clear();
   dataOutDelta.clear();
   dataOutInDiff.clear();
-  resources.clear();
   implicitArgsPointedBy.clear();
   externalResources.clear();
   summary = PointToGraph();
@@ -60,10 +61,35 @@ void LocalFCP::clear() {
 
 bool LocalFCP::runOnFunction(Function &F) {
   errs() << "\nrun LocalFCP on: " << F.getName() << "\n";
+
   clear();
 
-  identifyResources();
+  identifyResources(F);
 
+  identifyDUGNodes(F);
+
+  identifyDUGEdges();
+
+  simplifyDUG();
+
+  initWorkListDomOrder(F);
+
+  chaosIterating();
+
+  computeDataOut();
+
+  generateSummary();
+
+  dumpSummary("localSum." + F.getName().str());
+
+  checkAssertions();
+
+  dump("localFCP." + F.getName().str());
+
+  return false;
+}
+
+void LocalFCP::identifyDUGNodes(Function &F) {
   // An instruction is considered interesting if it returns an 'interesting' pointer-pointer
   // or it uses an 'interesting' pointer-pointer.
   for(inst_iterator I = inst_begin(F); I != inst_end(F); I++) {
@@ -91,14 +117,15 @@ bool LocalFCP::runOnFunction(Function &F) {
   for(const auto& kv : memSSA->argIncomingMergePoint) {
     DUGNodes.insert(kv.second);
   }
-  DUGNodes.insert(memSSA->globalsIncomingMergePoint);
+
   for(const auto& kv : memSSA->callRetArgsMergePoints) {
     for(const auto& np : kv.second) {
       DUGNodes.insert(np.second);
     }
   }
+}
 
-
+void LocalFCP::identifyDUGEdges() {
   // We don't care about storing/loading a non-pointer value. Remove these instructions.
   for(auto ite = DUGNodes.begin(); ite != DUGNodes.end(); ) {
     bool removed = false;
@@ -139,6 +166,45 @@ bool LocalFCP::runOnFunction(Function &F) {
     }
   }
 
+#ifdef __DBGFCP
+  for(auto inst : DUGNodes) {
+    errs() << "Predecessor of " << *inst << ":\n";
+    for(auto def: usedefEdges[inst]) {
+      errs() << "\t" << *def << "\n";
+    }
+  }
+#endif
+}
+
+void LocalFCP::identifyResources(Function& F) {
+  // Identify all resources (alloc / pointer args / globals) to be analyzed in the local phase.
+  for(inst_iterator I = inst_begin(F); I != inst_end(F); I++) {
+    if(dyn_cast<AllocaInst>(&*I)) {
+      resources.insert(&*I);
+    }
+#if 0 // pointers returned by functions need not to be processed in the local phase.
+    else if(auto ci = dyn_cast<CallInst>(&*I)) {
+      if(ci->getType()->isPointerTy()) {
+        resources.insert(ci);
+      }
+    }
+#endif
+    for(auto op = I->value_op_begin(); op != I->value_op_end(); op++) {
+      if(dyn_cast<GlobalVariable>(*op)) {
+        resources.insert(*op);
+        externalResources.insert(*op);
+      }
+    }
+  }
+  for(auto arg_ite = F.arg_begin(); arg_ite != F.arg_end(); arg_ite++) {
+    if(arg_ite->getType()->isPointerTy()) {
+      resources.insert(&*arg_ite);
+      externalResources.insert(&*arg_ite);
+    }
+  }
+}
+
+void LocalFCP::initWorkListDomOrder(Function &F) {
   // Push all DUGNodes to the worklist in an order consistent with the dominance order.
   // (If 'a' dominates 'b', then 'a' precedes 'b' in the initial worklist). This is crucial
   // to guarantee for every instruction in the iteration process, its used Values were
@@ -148,22 +214,18 @@ bool LocalFCP::runOnFunction(Function &F) {
     worklist.push(kv.second);
     inList.insert(kv.second);
   }
-  worklist.push(memSSA->globalsIncomingMergePoint);
-  inList.insert(memSSA->globalsIncomingMergePoint);
 
   initWorkListDomOrder(&F.getEntryBlock(), __visitedBB);
+}
 
- //#define __DBGFCP
-#ifdef __DBGFCP
-  for(auto inst : DUGNodes) {
-    errs() << "Predecessor of " << *inst << ":\n";
-    for(auto def: usedefEdges[inst]) {
-      errs() << "\t" << *def << "\n";
-    }
-  }
-#endif
+void LocalFCP::simplifyDUG() {
+  // TODO: remove redundant DUGNodes, for example:
+  //   1. PHINodes for non-pointer variables,
+  //   2. LLVM debug declaring calls,
+  //   3. PHINodes with only one incoming and outgoing edge.
+}
 
-  // TODO: remove redundant DUGNodes, e.g. PhiNodes for non-pointer variables, LLVM debug declaring calls.
+void LocalFCP::chaosIterating() {
 
   while(!worklist.empty()) {
     Instruction *inst = worklist.front();
@@ -269,7 +331,7 @@ bool LocalFCP::runOnFunction(Function &F) {
 
         for(auto kv : in.eqClass.leader) {
           if(in.valPointToSets.count(kv.first) == 0 &&
-              in.eqClass.equivalent(kv.first, ptrToLeader)) {
+             in.eqClass.equivalent(kv.first, ptrToLeader)) {
             in.valPointToSets.insert(kv.first);
             outDelta.push_back(make_merge(kv.first, ptrToLeader));
           }
@@ -376,7 +438,9 @@ bool LocalFCP::runOnFunction(Function &F) {
 
     dataOutInDiff[inst] = outInDiff;
   }
+}
 
+void LocalFCP::computeDataOut() {
   // Apply dataOutInDiff to dataIn to compute dataOut.
   for(auto inst: DUGNodes) {
 
@@ -400,43 +464,6 @@ bool LocalFCP::runOnFunction(Function &F) {
       } else if(delta.type == DeltaPointToGraph::Type::PointTo) {
         dataOut[inst].setPointTo(delta.x, delta.y);
       }
-    }
-  }
-
-  generateSummary();
-
-  checkAssertions();
-
-  dump();
-
-  return false;
-}
-
-void LocalFCP::identifyResources() {
-  Function &F = *func;
-  // Identify all resources (alloc / pointer args / globals) to be analyzed in the local phase.
-  for(inst_iterator I = inst_begin(F); I != inst_end(F); I++) {
-    if(dyn_cast<AllocaInst>(&*I)) {
-      resources.insert(&*I);
-    }
-#if 0 // pointers returned by functions need not to be processed in the local phase.
-    else if(auto ci = dyn_cast<CallInst>(&*I)) {
-      if(ci->getType()->isPointerTy()) {
-        resources.insert(ci);
-      }
-    }
-#endif
-    for(auto op = I->value_op_begin(); op != I->value_op_end(); op++) {
-      if(dyn_cast<GlobalVariable>(*op)) {
-        resources.insert(*op);
-        externalResources.insert(*op);
-      }
-    }
-  }
-  for(auto arg_ite = F.arg_begin(); arg_ite != F.arg_end(); arg_ite++) {
-    if(arg_ite->getType()->isPointerTy()) {
-      resources.insert(&*arg_ite);
-      externalResources.insert(&*arg_ite);
     }
   }
 }
@@ -707,6 +734,4 @@ void LocalFCP::generateSummary() {
     }
     summary.mergeRec(summary.valPointTo, ptg.valPointTo);
   }
-
-  dumpSummary();
 }
