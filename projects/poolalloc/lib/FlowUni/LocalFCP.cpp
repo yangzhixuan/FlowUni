@@ -30,9 +30,7 @@ bool LocalFCPWrapper::runOnModule(Module &M) {
   auto localSSA = &getAnalysis<LocalMemSSAWrapper>();
   for(auto& F : M) {
     if(F.isDeclaration() == false) {
-      LocalMemSSA ssa = localSSA->ssa[&F];
-      inner.memSSA = &ssa;
-      //inner.memSSA = &(localSSA->ssa[&F]);
+      inner.memSSA = &(localSSA->ssa[&F]);
       inner.runOnFunction(F);
       localFCP[&F] = inner;
     }
