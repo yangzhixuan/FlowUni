@@ -38,7 +38,7 @@ void LocalMemSSAWrapper::getAnalysisUsage(AnalysisUsage &AU) const {
 
 bool LocalMemSSAWrapper::runOnModule(Module &M) {
 
-#define __DBG_MEMSSA
+// #define __DBG_MEMSSA
 
 #ifdef __DBG_MEMSSA
   localMemSSA.dsa = &getAnalysis<EquivBUDataStructures>();
@@ -47,7 +47,7 @@ bool LocalMemSSAWrapper::runOnModule(Module &M) {
   for(auto& F: M) {
     if(F.isDeclaration() == false) {
       localMemSSA.func = &F;
-      localMemSSA.dsa = &getAnalysis<LocalDataStructures>();
+      localMemSSA.dsa = &getAnalysis<EquivBUDataStructures>();
       localMemSSA.dsgraph = localMemSSA.dsa->getDSGraph(F);
       localMemSSA.domFrontiers = &getAnalysis<DominanceFrontier>(F);
       localMemSSA.domTree = &(getAnalysis<DominatorTreeWrapperPass>(F).getDomTree());

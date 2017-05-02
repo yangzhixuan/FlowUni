@@ -85,10 +85,12 @@ namespace llvm {
   DeltaPointToGraph make_merge(Value *x, Value *y);
 
 
+  struct BuFCP;
   struct LocalFCP {
     friend struct LocalFCPWrapper;
+    friend struct BuFCP;
 
-    bool runOnFunction(Function &F);
+    bool runOnFunction(Function &F, LocalMemSSA*);
 
     // Get (a element of) the resource equivalent class pointed by 'x' if exists.
     // Return nullptr otherwise.
@@ -106,9 +108,13 @@ namespace llvm {
     // Def-Use Graph (DUG) nodes (i.e. instructions involved with 'interesting' pointers)
     std::unordered_set<Instruction*> DUGNodes;
 
+    // Remember each DUG node where it comes from.
+    std::unordered_map<Instruction*, LocalMemSSA*> nodeSSA;
+
     // Def-use edges for DUGNodes
     std::unordered_map<Instruction*, std::unordered_set<Instruction*>> defuseEdges;
     std::unordered_map<Instruction*, std::unordered_set<Instruction*>> usedefEdges;
+    std::unordered_map<Instruction*, std::unordered_set<Value*>> incomingOfArgOrRet;
 
     // Locations pointed from higher order pointers of globals and args are 'implicit' arguments.
     // We assign a unique name for these implicit arguments.
@@ -128,6 +134,9 @@ namespace llvm {
     // Dump the summary (point-to graph at returning points) as a DOT file.
     void dumpSummary(std::string fileName);
   private:
+    std::unordered_map<Value*, Instruction*> argCopy;
+    std::unordered_map<Instruction*, Value*> copyArg;
+
     std::queue<Instruction*> worklist;
     std::unordered_set<Instruction*> inList;
 
@@ -135,8 +144,6 @@ namespace llvm {
 
     // The difference between the output data and the input data for a DUGNode.
     std::unordered_map<Instruction*, std::vector<DeltaPointToGraph>> dataOutInDiff;
-
-    LocalMemSSA *memSSA;
 
     // Clear between function
     void clear();
@@ -146,8 +153,8 @@ namespace llvm {
 
     // Push all DUGNodes to the worklist in an order consistent with the dominance order.
     // (If 'a' dominates 'b', then 'a' precedes 'b' in the initial worklist)
-    void initWorkListDomOrder(Function& F);
-    void initWorkListDomOrder(BasicBlock *bb, std::unordered_set<BasicBlock*>& visited);
+    void initWorkListDomOrder(Function& F, LocalMemSSA*);
+    void initWorkListDomOrder(LocalMemSSA*, BasicBlock *bb, std::unordered_set<BasicBlock*>& visited);
 
     // Check testing annotations in the code.
     void checkAssertions();
@@ -156,7 +163,7 @@ namespace llvm {
     void identifyResources(Function& F);
 
     // Identify instructions should be considered in the data-flow analysis
-    void identifyDUGNodes(Function& F);
+    void identifyDUGNodes(Function& F, LocalMemSSA*);
     void identifyDUGEdges();
 
     // Removing unnecessary nodes in the DUG. (NOT implemented yet)

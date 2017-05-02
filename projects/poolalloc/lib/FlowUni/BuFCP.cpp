@@ -53,11 +53,11 @@ bool BuFCP::runOnModule(Module &M) {
 
     DSGraph* dsg = buDSA->getDSGraph(F);
 
-    sccMember.push_back(std::unordered_set<const Function*>());
+    sccMember.push_back(std::unordered_set<Function*>());
     for(auto kv : dsg->getReturnNodes()) {
       errs() << kv.first->getName() << ";";
-      funcSccNum[kv.first] = sccCount;
-      sccMember[sccCount].insert(kv.first);
+      funcSccNum[const_cast<Function*>(kv.first)] = sccCount;   // I promise not to modify it!
+      sccMember[sccCount].insert(const_cast<Function*>(kv.first));
 
       assert(buDSA->getDSGraph(*kv.first) == dsg && "Assumption 'SCC members share a DSGraph' is wrong");
     }
@@ -74,11 +74,33 @@ bool BuFCP::runOnModule(Module &M) {
     }
   }
 
-  // Step3. Post-order inline function summary.
+  // Step3. Perform SCC-local points-to analysis
+  for(int i = 0; i < sccCount; i++) {
+    sccFCP.push_back(LocalFCP());
+    LocalFCP &fcp = sccFCP[i];
+    auto &scc = sccMember[i];
+
+    fcp.clear();
+    for(auto f : scc) {
+      fcp.identifyResources(*f);
+      fcp.identifyDUGNodes(*f, &memSSA->ssa[f]);
+    }
+    fcp.identifyDUGEdges();
+    resolveSccCallsArgCopy(i, fcp);
+    fcp.simplifyDUG();
+    for(auto f : scc) {
+      fcp.initWorkListDomOrder(*f, &memSSA->ssa[f]);
+    }
+    fcp.chaosIterating();
+    fcp.computeDataOut();
+    fcp.generateSummary();
+  }
+
+  // Step4. Post-order inline function summary.
   return false;
 }
 
-void BuFCP::resolveInSccCalls(const Function* f) {
+void BuFCP::resolveInSccCalls(Function* f) {
   for(auto inst_ite = inst_begin(f); inst_ite != inst_end(f); inst_ite++) {
     if(auto call = dyn_cast<CallInst>(&*inst_ite)) {
       if(Function *callee = call->getCalledFunction()) {
@@ -120,6 +142,80 @@ void BuFCP::resolveInSccCalls(const Function* f) {
       } else if(const Value *callee = call->getCalledValue()) {
         // Indirect call
         assert(0 && "NOT IMPLEMENTED YET");
+      }
+    }
+  }
+}
+
+void BuFCP::resolveSccCallsArgCopy(int scc, LocalFCP & fcp) {
+  for(auto f : sccMember[scc]) {
+    for(auto inst_ite = inst_begin(f); inst_ite != inst_end(f); inst_ite++) {
+      if (auto call = dyn_cast<CallInst>(&*inst_ite)) {
+        if(Function *callee = call->getCalledFunction()) {
+          if(funcSccNum.count(callee) > 0 && funcSccNum[callee] == funcSccNum[f]) {
+            assert(call->getNumArgOperands() == callee->getArgumentList().size()
+                   && "caller and callee don't agree with num of arguments");
+
+            // Connects actual arguments to the PHINodes of formal arguments.
+            int i = 0;
+            for(auto& formal_ref : callee->args()) {
+              Value *actual = call->getArgOperand(i);
+              Value *formal = &formal_ref;
+
+              if(fcp.argCopy.count(formal) > 0) {
+
+                Instruction *copyInst = fcp.argCopy[formal];
+                fcp.incomingOfArgOrRet[copyInst].insert(actual);
+
+                Instruction *defInst = nullptr;
+                if(Instruction *inst = dyn_cast<Instruction>(actual)) {
+                  defInst = inst;
+                } else if(fcp.argCopy.count(actual) > 0) {
+                  defInst = fcp.argCopy[actual];
+                }
+
+#if 0 // Move it
+                else {
+                  errs() << __FILE__ << ":" << __LINE__ << " Warning: skip unsupported actual arguments: " << *actual << "\n";
+                }
+#endif
+
+                if(defInst != nullptr) {
+                  fcp.defuseEdges[defInst].insert(copyInst);
+                  fcp.usedefEdges[copyInst].insert(defInst);
+                }
+              }
+
+              i++;
+            }
+
+            // Connects returned values of the callee to the CallInst
+            for(auto inst_ite = inst_begin(callee); inst_ite != inst_end(callee); inst_ite++) {
+              if(auto ret = dyn_cast<ReturnInst>(&*inst_ite)) {
+                if(auto retVal = ret->getReturnValue()) {
+                  if(retVal->getType()->isPointerTy()) {
+                    fcp.incomingOfArgOrRet[call].insert(retVal);
+
+                    Instruction *defInst = nullptr;
+                    if(Instruction *inst = dyn_cast<Instruction>(retVal)) {
+                      defInst = inst;
+                    } else if(fcp.argCopy.count(retVal) > 0) {
+                      defInst = fcp.argCopy[retVal];
+                    }
+
+                    if(defInst != nullptr) {
+                      fcp.defuseEdges[defInst].insert(call);
+                      fcp.usedefEdges[call].insert(defInst);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } else if(const Value *callee = call->getCalledValue()) {
+          // Indirect call
+          assert(0 && "NOT IMPLEMENTED YET");
+        }
       }
     }
   }

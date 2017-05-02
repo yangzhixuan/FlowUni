@@ -30,8 +30,7 @@ bool LocalFCPWrapper::runOnModule(Module &M) {
   auto localSSA = &getAnalysis<LocalMemSSAWrapper>();
   for(auto& F : M) {
     if(F.isDeclaration() == false) {
-      inner.memSSA = &(localSSA->ssa[&F]);
-      inner.runOnFunction(F);
+      inner.runOnFunction(F, &(localSSA->ssa[&F]));
       localFCP[&F] = inner;
     }
   }
@@ -44,6 +43,7 @@ void LocalFCP::clear() {
   dataIn.clear();
   dataOut.clear();
   DUGNodes.clear();
+  nodeSSA.clear();
   defuseEdges.clear();
   usedefEdges.clear();
   while(!worklist.empty()) {
@@ -55,22 +55,25 @@ void LocalFCP::clear() {
   implicitArgsPointedBy.clear();
   externalResources.clear();
   summary = PointToGraph();
+  argCopy.clear();
+  copyArg.clear();
+  incomingOfArgOrRet.clear();
 }
 
-bool LocalFCP::runOnFunction(Function &F) {
+bool LocalFCP::runOnFunction(Function &F, LocalMemSSA *memSSA) {
   errs() << "\nrun LocalFCP on: " << F.getName() << "\n";
 
   clear();
 
   identifyResources(F);
 
-  identifyDUGNodes(F);
+  identifyDUGNodes(F, memSSA);
 
   identifyDUGEdges();
 
   simplifyDUG();
 
-  initWorkListDomOrder(F);
+  initWorkListDomOrder(F, memSSA);
 
   chaosIterating();
 
@@ -87,21 +90,43 @@ bool LocalFCP::runOnFunction(Function &F) {
   return false;
 }
 
-void LocalFCP::identifyDUGNodes(Function &F) {
+void LocalFCP::identifyDUGNodes(Function &F, LocalMemSSA* memSSA) {
   // An instruction is considered interesting if it returns an 'interesting' pointer-pointer
   // or it uses an 'interesting' pointer-pointer.
   for(inst_iterator I = inst_begin(F); I != inst_end(F); I++) {
     if(resources.count(&*I)) {
       DUGNodes.insert(&*I);
+      //   Remembering the 'memSSA' pointer should be safe if 'memSSA' is a pointer to a element
+      //   of a unordered_map container (of 'LocalMemSSAWrapper')
+      nodeSSA[&*I] = memSSA;
     } else if(dyn_cast<ReturnInst>(&*I)) {
       DUGNodes.insert(&*I);
+      nodeSSA[&*I] = memSSA;
+    } else if(I->getType()->isPointerTy()) {
+      DUGNodes.insert(&*I);
+      nodeSSA[&*I] = memSSA;
     } else {
       for (auto op = I->value_op_begin(); op != I->value_op_end(); op++) {
         if(op->getType()->isPointerTy()) {
           DUGNodes.insert(&*I);
+          nodeSSA[&*I] = memSSA;
           break;
         }
       }
+    }
+  }
+
+  // For pointer-type formal arguments, create a PHINode for it so that it can be merged
+  // with actual arguments in the inter-procedural phase.
+  for(auto arg_ite = F.arg_begin(); arg_ite != F.arg_end(); arg_ite++) {
+    if(arg_ite->getType()->isPointerTy()) {
+      Value *arg = &*arg_ite;
+      PHINode *phi = PHINode::Create( Type::getVoidTy(F.getContext()), 0, "");
+      argCopy[arg] = phi;
+      copyArg[phi] = arg;
+
+      DUGNodes.insert(phi);
+      nodeSSA[phi] = memSSA;
     }
   }
 
@@ -109,19 +134,23 @@ void LocalFCP::identifyDUGNodes(Function &F) {
   for(const auto& kv : memSSA->phiNodes) {
     for(const auto& kv2: kv.second) {
       DUGNodes.insert(kv2.second);
+      nodeSSA[kv2.second] = memSSA;
     }
   }
 
   for(const auto& kv : memSSA->argIncomingMergePoint) {
     DUGNodes.insert(kv.second);
+    nodeSSA[kv.second] = memSSA;
   }
 
   for(const auto& kv : memSSA->callRetArgsMergePoints) {
     for(const auto& np : kv.second) {
       DUGNodes.insert(np.second);
+      nodeSSA[np.second] = memSSA;
     }
   }
 }
+
 
 void LocalFCP::identifyDUGEdges() {
   // We don't care about storing/loading a non-pointer value. Remove these instructions.
@@ -154,6 +183,9 @@ void LocalFCP::identifyDUGEdges() {
         }
       }
     }
+
+    assert(nodeSSA.count(inst) > 0 && "identifyDUGNodes should remember the correspondence");
+    LocalMemSSA *memSSA = nodeSSA[inst];
     if(memSSA->memSSAUsers.count(inst) > 0) {
       for(auto user_inst : memSSA->memSSAUsers[inst]) {
         if(DUGNodes.count(user_inst) > 0) {
@@ -180,13 +212,6 @@ void LocalFCP::identifyResources(Function& F) {
     if(dyn_cast<AllocaInst>(&*I)) {
       resources.insert(&*I);
     }
-#if 0 // pointers returned by functions need not to be processed in the local phase.
-    else if(auto ci = dyn_cast<CallInst>(&*I)) {
-      if(ci->getType()->isPointerTy()) {
-        resources.insert(ci);
-      }
-    }
-#endif
     for(auto op = I->value_op_begin(); op != I->value_op_end(); op++) {
       if(dyn_cast<GlobalVariable>(*op)) {
         resources.insert(*op);
@@ -202,18 +227,25 @@ void LocalFCP::identifyResources(Function& F) {
   }
 }
 
-void LocalFCP::initWorkListDomOrder(Function &F) {
+void LocalFCP::initWorkListDomOrder(Function &F, LocalMemSSA* memSSA) {
   // Push all DUGNodes to the worklist in an order consistent with the dominance order.
   // (If 'a' dominates 'b', then 'a' precedes 'b' in the initial worklist). This is crucial
   // to guarantee for every instruction in the iteration process, its used Values were
   // calculated at least once.
-  std::unordered_set<BasicBlock*> __visitedBB;
   for(const auto& kv : memSSA->argIncomingMergePoint) {
     worklist.push(kv.second);
     inList.insert(kv.second);
   }
 
-  initWorkListDomOrder(&F.getEntryBlock(), __visitedBB);
+  for(auto arg_ite = F.arg_begin(); arg_ite != F.arg_end(); arg_ite++) {
+    if(argCopy.count(&*arg_ite)) {
+      worklist.push(argCopy[&*arg_ite]);
+      inList.insert(argCopy[&*arg_ite]);
+    }
+  }
+
+  std::unordered_set<BasicBlock*> __visitedBB;
+  initWorkListDomOrder(memSSA, &F.getEntryBlock(), __visitedBB);
 }
 
 void LocalFCP::simplifyDUG() {
@@ -240,7 +272,7 @@ void LocalFCP::chaosIterating() {
 
     // Update 'dataIn' for 'inst' from all its predecessors.
     for(auto def: usedefEdges[inst]) {
-      if(dyn_cast<AllocaInst>(def) && memSSA->memSSADefs[inst].count(def) == 0 ) {
+      if(dyn_cast<AllocaInst>(def) && nodeSSA[inst]->memSSADefs[inst].count(def) == 0 ) {
         // If it is only a value reference to an AllocInst, don't apply Alloca's modification to memory.
         // (It could be done in a more elegant way).
         continue;
@@ -292,46 +324,46 @@ void LocalFCP::chaosIterating() {
       auto ptrMem = getMemObjectsForVal(ptr);   // resource equivalent class pointed by 'ptr'
       auto ptrTo = in.getPointTo(ptrMem);
 
-      assert(ptrMem != nullptr);
+      if(ptrMem != nullptr) {
+        outDelta.clear();
 
-      outDelta.clear();
+        if(ptrTo == nullptr) {
+          assert(externalResources.count(ptrMem) > 0 && "Non-external memory objects should always points to something");
 
-      if(ptrTo == nullptr) {
-        assert(externalResources.count(ptrMem) > 0 && "Non-external memory objects should always points to something");
-
-        ptrTo = getImplicitArgOf(ptrMem);
+          ptrTo = getImplicitArgOf(ptrMem);
 #ifdef __DBGFCP
-        errs() << "get implicit argument at " << *inst << ", for " << PointToGraph::escape(ptrMem) << ", result: " << PointToGraph::escape(ptrTo) << "\n";
+          errs() << "get implicit argument at " << *inst << ", for " << PointToGraph::escape(ptrMem) << ", result: " << PointToGraph::escape(ptrTo) << "\n";
 #endif
 
-        in.setPointTo(ptrMem, ptrTo);
-        outDelta.push_back(make_pointTo(ptrMem, ptrTo));
-        resources.insert(ptrTo);
-      }
-
-      if(in.valPointTo == nullptr && ptrTo != nullptr) {
-        // First effective load.
-        in.valPointTo = ptrTo;
-        in.valPointToSets.insert(ptrTo);
-        valPtrChanged = true;
-      }
-      if(in.valPointTo != nullptr) {
-        auto ptrToLeader = in.eqClass.find(in.valPointTo);
-
-        // The following code calculate dataOut for LoadInst by brute force, i.e.,
-        // by checking whether EVERY Value* is equivalent with 'in.valPointTo'.
-        // This may be tracked in a smarter and economic way.
-
-        if(in.valPointToSets.count(ptrToLeader) == 0) {
-          in.valPointToSets.insert(ptrToLeader);
-          outDelta.push_back(make_merge(ptrToLeader, in.valPointTo));
+          in.setPointTo(ptrMem, ptrTo);
+          outDelta.push_back(make_pointTo(ptrMem, ptrTo));
+          resources.insert(ptrTo);
         }
 
-        for(auto kv : in.eqClass.leader) {
-          if(in.valPointToSets.count(kv.first) == 0 &&
-             in.eqClass.equivalent(kv.first, ptrToLeader)) {
-            in.valPointToSets.insert(kv.first);
-            outDelta.push_back(make_merge(kv.first, ptrToLeader));
+        if(in.valPointTo == nullptr && ptrTo != nullptr) {
+          // First effective load.
+          in.valPointTo = ptrTo;
+          in.valPointToSets.insert(ptrTo);
+          valPtrChanged = true;
+        }
+        if(in.valPointTo != nullptr) {
+          auto ptrToLeader = in.eqClass.find(in.valPointTo);
+
+          // The following code calculate dataOut for LoadInst by brute force, i.e.,
+          // by checking whether EVERY Value* is equivalent with 'in.valPointTo'.
+          // This may be tracked in a smarter and economic way.
+
+          if(in.valPointToSets.count(ptrToLeader) == 0) {
+            in.valPointToSets.insert(ptrToLeader);
+            outDelta.push_back(make_merge(ptrToLeader, in.valPointTo));
+          }
+
+          for(auto kv : in.eqClass.leader) {
+            if(in.valPointToSets.count(kv.first) == 0 &&
+               in.eqClass.equivalent(kv.first, ptrToLeader)) {
+              in.valPointToSets.insert(kv.first);
+              outDelta.push_back(make_merge(kv.first, ptrToLeader));
+            }
           }
         }
       }
@@ -344,12 +376,6 @@ void LocalFCP::chaosIterating() {
         auto content = store->getValueOperand();
         ptrMem = getMemObjectsForVal(ptr);
         contentMem = getMemObjectsForVal(content);
-        if(ptrMem == nullptr || contentMem == nullptr) {
-          errs() << "Error at " << *inst << "\n";
-          errs() << *ptr << " " << ptrMem << "\n";
-          errs() << *content << " " << contentMem << "\n";
-        }
-        assert(ptrMem && contentMem && "Referenced values should be calculated at least once.");
       } else if(auto alloca = dyn_cast<AllocaInst>(inst)){
         // AllocaInst is treated as storing an 'unspecified' value into the the memory.
         if(in.valPointTo == nullptr) {
@@ -361,55 +387,83 @@ void LocalFCP::chaosIterating() {
         contentMem = PointToGraph::unspecificSpace;
       }
 
-      if(in.eqClass.getRank(ptrMem) == 0 /* && externalResources.count(ptrMem) == 0*/) {
-        // ptrMem is a singleton equivalent class. Perform strong update.
+      if(ptrMem && contentMem) {
+        if(in.eqClass.getRank(ptrMem) == 0 /* && externalResources.count(ptrMem) == 0*/) {
+          // ptrMem is a singleton equivalent class. Perform strong update.
 
-        // Overwrite all previous 'pointTo' modification of this memory object.
-        for(auto ite = outDelta.begin(); ite != outDelta.end(); ) {
-          auto inDel = *ite;
-          if(inDel.type == DeltaPointToGraph::Type::PointTo && in.eqClass.equivalent(inDel.x, ptrMem)) {
-            ite = outDelta.erase(ite);
-          } else {
-            ++ite;
-          }
-        }
-
-        auto delta = make_pointTo(ptrMem, contentMem);
-        if(!isEmitted(delta, inst)) {
-          outDelta.push_back(delta);
-          outInDiff.push_back(delta);
-          // errs() << "strong update for: " << *ptrMem << ", at " << *inst << ", " << escape(ptrMem) << " to " << escape(contentMem) << "\n";
-        }
-      } else {
-        // ptrMem is not a unique memory resource. Perform weak update.
-        auto ptrTo = in.getPointTo(ptrMem);
-
-        if(ptrTo == nullptr || !in.eqClass.equivalent(ptrTo, contentMem)) {
-          if(ptrTo == nullptr) {
-            assert(externalResources.count(ptrMem) > 0 && "Non-external memory objects should always points to something");
-            auto ptrToNew = getImplicitArgOf(ptrMem);
-            errs() << "get implicit argument at " << *inst << ", for " << PointToGraph::escape(ptrMem) << ", result: " << PointToGraph::escape(ptrToNew) << "\n";
-            auto delta = make_pointTo(ptrMem, ptrToNew);
-            outDelta.push_back(delta);
-            outInDiff.push_back(delta);
-            resources.insert(ptrToNew);
+          // Overwrite all previous 'pointTo' modification of this memory object.
+          for(auto ite = outDelta.begin(); ite != outDelta.end(); ) {
+            auto inDel = *ite;
+            if(inDel.type == DeltaPointToGraph::Type::PointTo && in.eqClass.equivalent(inDel.x, ptrMem)) {
+              ite = outDelta.erase(ite);
+            } else {
+              ++ite;
+            }
           }
 
           auto delta = make_pointTo(ptrMem, contentMem);
           if(!isEmitted(delta, inst)) {
             outDelta.push_back(delta);
             outInDiff.push_back(delta);
+            // errs() << "strong update for: " << *ptrMem << ", at " << *inst << ", " << escape(ptrMem) << " to " << escape(contentMem) << "\n";
+          }
+        } else {
+          // ptrMem is not a unique memory resource. Perform weak update.
+          auto ptrTo = in.getPointTo(ptrMem);
+
+          if(ptrTo == nullptr || !in.eqClass.equivalent(ptrTo, contentMem)) {
+            if(ptrTo == nullptr) {
+              assert(externalResources.count(ptrMem) > 0 && "Non-external memory objects should always points to something");
+              auto ptrToNew = getImplicitArgOf(ptrMem);
+              errs() << "get implicit argument at " << *inst << ", for " << PointToGraph::escape(ptrMem) << ", result: " << PointToGraph::escape(ptrToNew) << "\n";
+              auto delta = make_pointTo(ptrMem, ptrToNew);
+              outDelta.push_back(delta);
+              outInDiff.push_back(delta);
+              resources.insert(ptrToNew);
+            }
+
+            auto delta = make_pointTo(ptrMem, contentMem);
+            if(!isEmitted(delta, inst)) {
+              outDelta.push_back(delta);
+              outInDiff.push_back(delta);
+            }
           }
         }
       }
     } else if(auto phi = dyn_cast<PHINode>(inst)) {
-      // Nothing needed
+      if(copyArg.count(phi) > 0) {
+        // It's a fake PHINode for setting formal argument.
+        for(auto ptr : incomingOfArgOrRet[phi]) {
+          auto ptrMem = getMemObjectsForVal(ptr);
+          if(ptrMem == nullptr) {
+            continue;
+          }
+          assert(copyArg.count(phi) > 0);
+          outDelta.push_back(make_merge(copyArg[phi], ptrMem));
+        }
+      } else if(phi->getType()->isPointerTy()){
+        // It's a real PHINode
+        for(auto& ptr : phi->incoming_values()) {
+          auto ptrMem = getMemObjectsForVal(ptr.get());
+          if(ptrMem == nullptr) {
+            continue;
+          }
+          if(in.valPointTo == nullptr) {
+            in.valPointTo = ptrMem;
+            valPtrChanged = true;
+          } else {
+            outDelta.push_back(make_merge(in.valPointTo, ptrMem));
+          }
+        }
+      } else {
+        // It's a fake PHINode for memory objects. NOTHING need to do.
+      }
     } else if(auto cast = dyn_cast<BitCastInst>(inst)) {
       if(cast->getSrcTy()->isPointerTy() && cast->getDestTy()->isPointerTy()) {
         // Pointer to pointer cast
         auto src = cast->getOperand(0);
         auto srcMem = getMemObjectsForVal(src);
-        if(in.valPointTo == nullptr) {
+        if(in.valPointTo == nullptr && srcMem != nullptr) {
           valPtrChanged = true;
           in.valPointTo = srcMem;
           // TODO: maintain valPointToSet in an easy way.
@@ -420,6 +474,22 @@ void LocalFCP::chaosIterating() {
       if(retPtr && retPtr->getType()->isPointerTy()) {
         auto retMem = getMemObjectsForVal(retPtr);
         in.valPointTo = retMem;
+      }
+    } else if (auto call = dyn_cast<CallInst>(inst)) {
+      // Merge returned value
+      if(incomingOfArgOrRet.count(call) > 0) {
+        for(auto ptr : incomingOfArgOrRet[call]) {
+          auto ptrMem = getMemObjectsForVal(ptr);
+          if(ptrMem == nullptr) {
+            continue;
+          }
+          if(in.valPointTo == nullptr) {
+            in.valPointTo = ptrMem;
+            valPtrChanged = true;
+          } else {
+            outDelta.push_back(make_merge(in.valPointTo, ptrMem));
+          }
+        }
       }
     } else {
       // TODO: other instructions
@@ -579,6 +649,7 @@ Value* LocalFCP::getMemObjectsForVal(Value *x) {
       return dataIn[inst].valPointTo;
     }
   }
+  errs() << "Unknown Value type: " << *x << "\n";
   return nullptr;
 }
 
@@ -656,7 +727,7 @@ std::string PointToGraph::escape(Value* v) {
   return str;
 }
 
-void LocalFCP::initWorkListDomOrder(BasicBlock *bb, std::unordered_set<BasicBlock*>& visited) {
+void LocalFCP::initWorkListDomOrder(LocalMemSSA *memSSA, BasicBlock *bb, std::unordered_set<BasicBlock*>& visited) {
   visited.insert(bb);
   for(auto& n_phi : memSSA->phiNodes[bb]) {
     PHINode *phi = n_phi.second;
@@ -682,7 +753,7 @@ void LocalFCP::initWorkListDomOrder(BasicBlock *bb, std::unordered_set<BasicBloc
   }
   for(auto succ: successors(bb)) {
     if(visited.count(succ) == 0) {
-      initWorkListDomOrder(succ, visited);
+      initWorkListDomOrder(memSSA, succ, visited);
     }
   }
 }

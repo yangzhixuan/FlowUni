@@ -14,6 +14,7 @@
 #include "llvm/IR/Dominators.h"
 #include "dsa/DataStructure.h"
 #include "flowuni/MemSSA.h"
+#include "flowuni/LocalFCP.h"
 
 #include <set>
 #include <map>
@@ -32,20 +33,23 @@ namespace llvm {
     BuFCP();
 
     // Map function to the number of the SCC the function belongs to.
-    std::unordered_map<const Function*, int> funcSccNum;
+    std::unordered_map<Function*, int> funcSccNum;
 
     // Number of SCC in the module.
     int sccCount;
 
     // Map (the number of) SCC to a set of its members.
-    std::vector<std::unordered_set<const Function*>> sccMember;
+    std::vector<std::unordered_set<Function*>> sccMember;
 
+    // Data-flow analysis for each SCC.
+    std::vector<LocalFCP> sccFCP;
   private:
     EquivBUDataStructures* buDSA;
     LocalMemSSAWrapper* memSSA;
     void clear();
 
-    void resolveInSccCalls(const Function*);
+    void resolveInSccCalls(Function*);
+    void resolveSccCallsArgCopy(int scc, LocalFCP&);
   };
 }
 
