@@ -27,6 +27,20 @@ namespace {
     return std::string( buf.get(), buf.get() + size - 1 ); // We don't want the '\0' inside
   }
 
+  std::string trim(std::string s) {
+    if (s.empty()) {
+      return s;
+    }
+
+    s.erase(0,s.find_first_not_of(" "));
+    s.erase(s.find_last_not_of(" ") + 1);
+    s.erase(0,s.find_first_not_of("\n"));
+    s.erase(s.find_last_not_of("\n") + 1);
+    s.erase(0,s.find_first_not_of("\t"));
+    s.erase(s.find_last_not_of("\t") + 1);
+    return s;
+  }
+
   template<typename T>
   std::string toString(const T& a) {
     std::ostringstream os;
@@ -158,7 +172,7 @@ void LocalMemSSA::dump(){
 
   // Output all DSNode* as nodes
   for(auto n : memObjects) {
-    of << indent << string_format("%s[label=\"%s\"];\n", nodeName(n).c_str(), n->getCaption().c_str());
+    of << indent << string_format("%s[label=\"%s\"];\n", nodeName(n).c_str(), trim(n->getCaption()).c_str());
   }
 
   // All DSNodes form a subgraph
@@ -264,11 +278,19 @@ void LocalFCP::dump(std::string fileName) {
   of << "digraph {\n";
   indent.inc();
 
-  // Emit all values as nodes.
+  // Emit all DUGNodes as nodes.
   for(auto inst: DUGNodes) {
-    if(!inst->getType()->isVoidTy()) {
-      of << indent << string_format("%s[label=\"%s\"];\n", nodeName(inst).c_str(), toString(*inst).c_str());
+    std::string label = toString(*inst);
+    if(setInstArg.count(inst) > 0) {
+      label = label + "(ArgValPhi for " + toString(*setInstArg[inst]) + ")";
+    } else if(fakePhiSource.count(inst) > 0) {
+      if(fakePhiSource[inst] == LocalMemSSA::GlobalsLeader) {
+        label = label + "(for globals)";
+      } else {
+        label = label + "\\n(for " + trim(fakePhiSource[inst]->getCaption()) + ")";
+      }
     }
+    of << indent << string_format("%s[label=\"%s\"];\n", nodeName(inst).c_str(), label.c_str());
   }
 
   auto resources = this->resources;
@@ -276,29 +298,49 @@ void LocalFCP::dump(std::string fileName) {
 
   // Emit all resources nodes.
   for(auto val: resources) {
-    of << indent << string_format("%s[label=\"%s\"];\n", nodeName(val, "r").c_str(), PointToGraph::escape(val).c_str());
+    of << indent << string_format("%s[label=\"%s\", color=\"green\"];\n", nodeName(val, "r").c_str(), PointToGraph::escape(val).c_str());
   }
 
+  int numClusters = 0;
+
+#if 0
   // All values are a subgraph.
-  of << indent << string_format("subgraph cluster_%d{\n", 0);
+  of << indent << string_format("subgraph cluster_%d{\n", numClusters++);
   indent.inc();
 
   of<<indent<<"label=\"Values\";\n";
   of<<indent;
   for(auto inst: DUGNodes) {
-    if(!inst->getType()->isVoidTy()) {
-      of << string_format("%s;", nodeName(inst).c_str());
-    }
+    of << string_format("%s;", nodeName(inst).c_str());
   }
   of << "\n";
 
   indent.dec();
   of << indent << "}\n";
+#endif
 
+  // Different functions in different clusters
+  std::unordered_map<LocalMemSSA*, std::unordered_set<Instruction*>> partition;
+  for(auto inst: DUGNodes) {
+    partition[nodeSSA[inst]].insert(inst);
+  }
+  for(auto kv : partition) {
+    of << indent << string_format("subgraph cluster_%d{\n", numClusters++);
+    indent.inc();
 
+    of<<indent;
+    for(auto inst: kv.second) {
+      of << string_format("%s;", nodeName(inst).c_str());
+    }
+    of << "\n";
+
+    indent.dec();
+    of << indent << "}\n";
+  }
+
+#if 0
   // All resources are a subgraph.
-
-  of << indent << string_format("subgraph cluster_%d{\n", 1);
+  of << indent << string_format("subgraph cluster_%d{\n", numClusters++);
   indent.inc();
 
   of<<indent<<"label=\"Resources\";\n";
@@ -310,6 +352,8 @@ void LocalFCP::dump(std::string fileName) {
 
   indent.dec();
   of << indent << "}\n";
+#endif
+
 
   // Edges between resources and values.
   for(auto inst: DUGNodes) {
@@ -317,9 +361,16 @@ void LocalFCP::dump(std::string fileName) {
       for(auto val: resources) {
         Value *to = dataOut[inst].valPointTo;
         if(dataOut[inst].eqClass.equivalent(to, val)) {
-          of << indent << string_format("%s -> %s;\n", nodeName(inst).c_str(), nodeName(val, "r").c_str());
+          of << indent << string_format("%s -> %s[color=\"grey\"];\n", nodeName(inst).c_str(), nodeName(val, "r").c_str());
         }
       }
+    }
+  }
+
+  // Edges between DUGNodes
+  for(auto inst : DUGNodes) {
+    for(auto user : defuseEdges[inst]) {
+      of << indent << string_format("%s -> %s[color=\"blue\"];\n", nodeName(inst).c_str(), nodeName(user).c_str());
     }
   }
 

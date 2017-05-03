@@ -50,6 +50,8 @@ namespace llvm {
 
     void resolveInSccCalls(Function*);
     void resolveSccCallsArgCopy(int scc, LocalFCP&);
+
+    std::unordered_map<Function*, std::unordered_set<ReturnInst*>> retInstOfFunc;
   };
 }
 

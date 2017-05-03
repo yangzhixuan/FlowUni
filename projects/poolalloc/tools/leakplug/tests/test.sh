@@ -15,12 +15,13 @@
 # bin/llvm-dis ${1%.c}.fixed.bc
 
 echo "testing $1"
-bin/clang -emit-llvm -O0 -c -g $1 -o ${1%.c}.bc
+#bin/clang -emit-llvm -O0 -c -g $1 -o ${1%.c}.bc
+bin/clang -emit-llvm -c $1 -o ${1%.c}.bc
 bin/llvm-dis ${1%.c}.bc
 #time ../../../Debug+Asserts/bin/leakplug -disable-dsa-stdlib ${1%.c}.bc
 time ../../../Debug+Asserts/bin/leakplug -dsa-stdlib-no-fold ${1%.c}.bc
 
-for d in *.dot
-do
-  dot -Tjpg $d -o $d.jpg
-done
+# for d in *.dot
+# do
+#   dot -Tjpg $d -o $d.jpg
+# done

@@ -95,7 +95,7 @@ namespace llvm {
     // Get (a element of) the resource equivalent class pointed by 'x' if exists.
     // Return nullptr otherwise.
     Value *getMemObjectsForVal(Value *x);
-    bool hasMemObjectsForVal(Value *x);
+
     std::unordered_set<Value*> getPointToSetForVal(Value *x);
 
     // Resources considered in this phase.
@@ -133,9 +133,22 @@ namespace llvm {
 
     // Dump the summary (point-to graph at returning points) as a DOT file.
     void dumpSummary(std::string fileName);
+
+    // Stats
+    int numInstDUG;
+    int numFakePhiDUG;
+    int numArgValFakePhi;
+    int numSSAFakePhi;
+    int numArgMemFakePhi;
+    int numCallRetFakePhi;
+
+    int numEdges;
+    int numMsgPassed;
+    void countStats();
   private:
-    std::unordered_map<Value*, Instruction*> argCopy;
-    std::unordered_map<Instruction*, Value*> copyArg;
+    std::unordered_map<Value*, Instruction*> argSetInst;
+    std::unordered_map<Instruction*, Value*> setInstArg;
+    std::unordered_map<Instruction*, DSNode*> fakePhiSource;
 
     std::queue<Instruction*> worklist;
     std::unordered_set<Instruction*> inList;

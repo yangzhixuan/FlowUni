@@ -89,6 +89,8 @@ namespace llvm {
 
 #endif
 
+    static DSNode* GlobalsLeader;
+
   private:
     // All DSNode-s reachable from the actual arguments of a CallInst
     std::unordered_map<CallInst*, std::set<DSNode*>> memModifiedByCall;
@@ -113,8 +115,6 @@ namespace llvm {
 
     // Clear between functions
     void clear();
-
-    static DSNode* GlobalsLeader;
   };
 
   struct LocalMemSSAWrapper : public ModulePass {

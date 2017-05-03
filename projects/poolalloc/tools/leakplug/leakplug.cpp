@@ -92,8 +92,8 @@ int main(int argc, const char *argv[])
 //    Passes.add(new EQTDDataStructures());
     // Passes.add(new leakplug::LeakPlug());
     Passes.add(new LocalMemSSAWrapper());
-    Passes.add(new LocalFCPWrapper());
-    // Passes.add(new BuFCP());
+    // Passes.add(new LocalFCPWrapper());
+    Passes.add(new BuFCP());
 
 
     // Verify the final result

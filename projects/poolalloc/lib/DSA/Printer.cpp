@@ -49,6 +49,7 @@ static std::string getCaption(const DSNode *N, const DSGraph *G) {
 
   if (!G) G = N->getParentGraph();
 
+#if 0
   // Get the module from ONE of the functions in the graph it is available.
   if (G && G->retnodes_begin() != G->retnodes_end())
     M = G->retnodes_begin()->first->getParent();
@@ -58,6 +59,7 @@ static std::string getCaption(const DSNode *N, const DSGraph *G) {
     if (SM.global_begin() != SM.global_end())
       M = (*SM.global_begin())->getParent();
   }
+#endif
 
   if (N->isNodeCompletelyFolded())
     OS << "COLLAPSED";

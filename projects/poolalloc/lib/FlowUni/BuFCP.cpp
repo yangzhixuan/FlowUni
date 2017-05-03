@@ -34,6 +34,8 @@ void BuFCP::clear() {
   funcSccNum.clear();
   sccMember.clear();
   sccCount = 0;
+  sccFCP.clear();
+  retInstOfFunc.clear();
 }
 
 bool BuFCP::runOnModule(Module &M) {
@@ -74,11 +76,20 @@ bool BuFCP::runOnModule(Module &M) {
     }
   }
 
-  // Step3. Perform SCC-local points-to analysis
+  // Step3. Perform intra-SCC points-to analysis
   for(int i = 0; i < sccCount; i++) {
+    errs() << "\nSCC " << i << "\n";
+
     sccFCP.push_back(LocalFCP());
     LocalFCP &fcp = sccFCP[i];
     auto &scc = sccMember[i];
+
+    errs() << "Member: ";
+    for(auto f : scc) {
+      errs() << f->getName() << ", ";
+    }
+    errs() << "\n";
+
 
     fcp.clear();
     for(auto f : scc) {
@@ -94,6 +105,10 @@ bool BuFCP::runOnModule(Module &M) {
     fcp.chaosIterating();
     fcp.computeDataOut();
     fcp.generateSummary();
+
+    fcp.checkAssertions();
+    fcp.dump("SccFCP." + (*(scc.begin()))->getName().str());
+    fcp.countStats();
   }
 
   // Step4. Post-order inline function summary.
@@ -115,15 +130,15 @@ void BuFCP::resolveInSccCalls(Function* f) {
           // Look up a const pointer should be safe. Take care not to store the casted pointer in memSSA.
           CallInst *call_mut = const_cast<CallInst*>(call);
           if(callerSSA.callArgLastDef.count(call_mut) > 0) {
-            auto& actual = callerSSA.callArgLastDef[call_mut];
-            auto& formal = calleeSSA.argIncomingMergePoint;
+            auto& actuals = callerSSA.callArgLastDef[call_mut];
+            auto& formals = calleeSSA.argIncomingMergePoint;
 
             // Connects actual arguments ('lastDef') and formal arguments ('argIncomingMergePoint').
-            for(const auto& n_i : actual) {
+            for(const auto& n_i : actuals) {
               DSNode *n = n_i.first;
-              if(formal.count(n) > 0) {
-                callerSSA.memSSAUsers[n_i.second].insert(formal[n]);
-                calleeSSA.memSSADefs[formal[n]].insert(n_i.second);
+              if(formals.count(n) > 0) {
+                callerSSA.memSSAUsers[n_i.second].insert(formals[n]);
+                calleeSSA.memSSADefs[formals[n]].insert(n_i.second);
               }
             }
 
@@ -143,6 +158,8 @@ void BuFCP::resolveInSccCalls(Function* f) {
         // Indirect call
         assert(0 && "NOT IMPLEMENTED YET");
       }
+    } else if(auto ret = dyn_cast<ReturnInst>(&*inst_ite)) {
+      retInstOfFunc[f].insert(ret);
     }
   }
 }
@@ -162,23 +179,17 @@ void BuFCP::resolveSccCallsArgCopy(int scc, LocalFCP & fcp) {
               Value *actual = call->getArgOperand(i);
               Value *formal = &formal_ref;
 
-              if(fcp.argCopy.count(formal) > 0) {
+              if(fcp.argSetInst.count(formal) > 0) {
 
-                Instruction *copyInst = fcp.argCopy[formal];
+                Instruction *copyInst = fcp.argSetInst[formal];
                 fcp.incomingOfArgOrRet[copyInst].insert(actual);
 
                 Instruction *defInst = nullptr;
                 if(Instruction *inst = dyn_cast<Instruction>(actual)) {
                   defInst = inst;
-                } else if(fcp.argCopy.count(actual) > 0) {
-                  defInst = fcp.argCopy[actual];
+                } else if(fcp.argSetInst.count(actual) > 0) {
+                  defInst = fcp.argSetInst[actual];
                 }
-
-#if 0 // Move it
-                else {
-                  errs() << __FILE__ << ":" << __LINE__ << " Warning: skip unsupported actual arguments: " << *actual << "\n";
-                }
-#endif
 
                 if(defInst != nullptr) {
                   fcp.defuseEdges[defInst].insert(copyInst);
@@ -190,23 +201,22 @@ void BuFCP::resolveSccCallsArgCopy(int scc, LocalFCP & fcp) {
             }
 
             // Connects returned values of the callee to the CallInst
-            for(auto inst_ite = inst_begin(callee); inst_ite != inst_end(callee); inst_ite++) {
-              if(auto ret = dyn_cast<ReturnInst>(&*inst_ite)) {
-                if(auto retVal = ret->getReturnValue()) {
-                  if(retVal->getType()->isPointerTy()) {
-                    fcp.incomingOfArgOrRet[call].insert(retVal);
+            assert(retInstOfFunc.count(callee) > 0 && "ReturnInst should be identified in resolveInSccCalls()");
+            for(auto ret : retInstOfFunc[callee]) {
+              if(auto retVal = ret->getReturnValue()) {
+                if(retVal->getType()->isPointerTy()) {
+                  fcp.incomingOfArgOrRet[call].insert(retVal);
 
-                    Instruction *defInst = nullptr;
-                    if(Instruction *inst = dyn_cast<Instruction>(retVal)) {
-                      defInst = inst;
-                    } else if(fcp.argCopy.count(retVal) > 0) {
-                      defInst = fcp.argCopy[retVal];
-                    }
+                  Instruction *defInst = nullptr;
+                  if(Instruction *inst = dyn_cast<Instruction>(retVal)) {
+                    defInst = inst;
+                  } else if(fcp.argSetInst.count(retVal) > 0) {
+                    defInst = fcp.argSetInst[retVal];
+                  }
 
-                    if(defInst != nullptr) {
-                      fcp.defuseEdges[defInst].insert(call);
-                      fcp.usedefEdges[call].insert(defInst);
-                    }
+                  if(defInst != nullptr) {
+                    fcp.defuseEdges[defInst].insert(call);
+                    fcp.usedefEdges[call].insert(defInst);
                   }
                 }
               }

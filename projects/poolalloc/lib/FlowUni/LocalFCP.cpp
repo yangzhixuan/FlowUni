@@ -2,16 +2,29 @@
 // Created by 杨至轩 on 4/3/17.
 //
 
+// #define __DBGFCP
+
 #include "flowuni/LocalFCP.h"
 #include "flowuni/MemSSA.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Constants.h"
 #include <unordered_set>
+#include <cmath>
 
 using namespace llvm;
 
 
 namespace{
   static RegisterPass<LocalFCPWrapper> X("flowuni-local", "Flow-sensitive unification based points-to analysis", true, true);
+
+  template<typename ... Args>
+  std::string string_format( const std::string& format, Args ... args )
+  {
+    size_t size = snprintf( nullptr, 0, format.c_str(), args ... ) + 1; // Extra space for '\0'
+    std::unique_ptr<char[]> buf( new char[ size ] );
+    snprintf( buf.get(), size, format.c_str(), args ... );
+    return std::string( buf.get(), buf.get() + size - 1 ); // We don't want the '\0' inside
+  }
 }
 
 
@@ -55,9 +68,13 @@ void LocalFCP::clear() {
   implicitArgsPointedBy.clear();
   externalResources.clear();
   summary = PointToGraph();
-  argCopy.clear();
-  copyArg.clear();
+  argSetInst.clear();
+  setInstArg.clear();
+  fakePhiSource.clear();
   incomingOfArgOrRet.clear();
+
+  numEdges = numInstDUG = numFakePhiDUG = numMsgPassed = 0;
+  numArgValFakePhi = numSSAFakePhi = numArgMemFakePhi = numCallRetFakePhi = 0;
 }
 
 bool LocalFCP::runOnFunction(Function &F, LocalMemSSA *memSSA) {
@@ -122,11 +139,12 @@ void LocalFCP::identifyDUGNodes(Function &F, LocalMemSSA* memSSA) {
     if(arg_ite->getType()->isPointerTy()) {
       Value *arg = &*arg_ite;
       PHINode *phi = PHINode::Create( Type::getVoidTy(F.getContext()), 0, "");
-      argCopy[arg] = phi;
-      copyArg[phi] = arg;
+      argSetInst[arg] = phi;
+      setInstArg[phi] = arg;
 
       DUGNodes.insert(phi);
       nodeSSA[phi] = memSSA;
+      numArgValFakePhi += 1;
     }
   }
 
@@ -135,18 +153,24 @@ void LocalFCP::identifyDUGNodes(Function &F, LocalMemSSA* memSSA) {
     for(const auto& kv2: kv.second) {
       DUGNodes.insert(kv2.second);
       nodeSSA[kv2.second] = memSSA;
+      numSSAFakePhi += 1;
+      fakePhiSource[kv2.second] = kv2.first;
     }
   }
 
   for(const auto& kv : memSSA->argIncomingMergePoint) {
     DUGNodes.insert(kv.second);
     nodeSSA[kv.second] = memSSA;
+    numArgMemFakePhi += 1;
+    fakePhiSource[kv.second] = kv.first;
   }
 
   for(const auto& kv : memSSA->callRetArgsMergePoints) {
     for(const auto& np : kv.second) {
       DUGNodes.insert(np.second);
       nodeSSA[np.second] = memSSA;
+      numCallRetFakePhi += 1;
+      fakePhiSource[np.second] = np.first;
     }
   }
 }
@@ -180,6 +204,18 @@ void LocalFCP::identifyDUGEdges() {
         if(DUGNodes.count(user_inst) > 0) {
           defuseEdges[inst].insert(user_inst);
           usedefEdges[user_inst].insert(inst);
+        }
+      }
+    }
+
+    if(setInstArg.count(inst) > 0) {
+      Value *arg = setInstArg[inst];
+      for(auto user : arg->users()) {
+        if(auto user_inst = dyn_cast<Instruction>(user)) {
+          if(DUGNodes.count(user_inst) > 0) {
+            defuseEdges[inst].insert(user_inst);
+            usedefEdges[user_inst].insert(inst);
+          }
         }
       }
     }
@@ -238,9 +274,9 @@ void LocalFCP::initWorkListDomOrder(Function &F, LocalMemSSA* memSSA) {
   }
 
   for(auto arg_ite = F.arg_begin(); arg_ite != F.arg_end(); arg_ite++) {
-    if(argCopy.count(&*arg_ite)) {
-      worklist.push(argCopy[&*arg_ite]);
-      inList.insert(argCopy[&*arg_ite]);
+    if(argSetInst.count(&*arg_ite)) {
+      worklist.push(argSetInst[&*arg_ite]);
+      inList.insert(argSetInst[&*arg_ite]);
     }
   }
 
@@ -253,15 +289,26 @@ void LocalFCP::simplifyDUG() {
   //   1. PHINodes for non-pointer variables,
   //   2. LLVM debug declaring calls,
   //   3. PHINodes with only one incoming and outgoing edge.
+  int removeable = 0;
+  for(auto inst : DUGNodes) {
+    if(defuseEdges[inst].size() == 0 && usedefEdges[inst].size() == 0) {
+      removeable += 1;
+    } else if(defuseEdges[inst].size() == 1 && usedefEdges[inst].size() == 1 && dyn_cast<PHINode>(inst)){
+      removeable += 1;
+
+    }
+  }
+  errs() << "Num of removable nodes: " << removeable << "\n";
 }
 
 void LocalFCP::chaosIterating() {
 
   while(!worklist.empty()) {
     Instruction *inst = worklist.front();
-    assert(DUGNodes.count(inst) > 0);
     worklist.pop();
     inList.erase(inst);
+
+    assert(DUGNodes.count(inst) > 0);
 
     // The input data-flow data.
     auto& in = dataIn[inst];
@@ -274,11 +321,12 @@ void LocalFCP::chaosIterating() {
     for(auto def: usedefEdges[inst]) {
       if(dyn_cast<AllocaInst>(def) && nodeSSA[inst]->memSSADefs[inst].count(def) == 0 ) {
         // If it is only a value reference to an AllocInst, don't apply Alloca's modification to memory.
-        // (It could be done in a more elegant way).
+        // (It should be done in a more elegant way).
         continue;
       }
 
       for(const auto& delta: dataOutDelta[def]) {
+        numMsgPassed += 1;
         if(delta.type == DeltaPointToGraph::Type::Merge) {
           bool activated = in.mergeRec(delta.x, delta.y);
           if(activated) {
@@ -431,18 +479,18 @@ void LocalFCP::chaosIterating() {
         }
       }
     } else if(auto phi = dyn_cast<PHINode>(inst)) {
-      if(copyArg.count(phi) > 0) {
+      if(setInstArg.count(phi) > 0) {
         // It's a fake PHINode for setting formal argument.
         for(auto ptr : incomingOfArgOrRet[phi]) {
           auto ptrMem = getMemObjectsForVal(ptr);
           if(ptrMem == nullptr) {
             continue;
           }
-          assert(copyArg.count(phi) > 0);
-          outDelta.push_back(make_merge(copyArg[phi], ptrMem));
+          assert(setInstArg.count(phi) > 0);
+          outDelta.push_back(make_merge(setInstArg[phi], ptrMem));
         }
       } else if(phi->getType()->isPointerTy()){
-        // It's a real PHINode
+        // It's a real PHINode for LLVM Values.
         for(auto& ptr : phi->incoming_values()) {
           auto ptrMem = getMemObjectsForVal(ptr.get());
           if(ptrMem == nullptr) {
@@ -468,6 +516,16 @@ void LocalFCP::chaosIterating() {
           in.valPointTo = srcMem;
           // TODO: maintain valPointToSet in an easy way.
         }
+      }
+    } else if(auto gep = dyn_cast<GetElementPtrInst>(inst)) {
+      // Our implementation is field-insensitive so the GEP instruction is treated as
+      // directly returning the pointer operand.
+      auto src = gep->getPointerOperand();
+      auto srcMem = getMemObjectsForVal(src);
+      if(in.valPointTo == nullptr && srcMem != nullptr) {
+        valPtrChanged = true;
+        in.valPointTo = srcMem;
+        // TODO: maintain valPointToSet in an easy way.
       }
     } else if(auto ret = dyn_cast<ReturnInst>(inst)) {
       Value *retPtr = ret->getReturnValue();
@@ -546,6 +604,36 @@ bool LocalFCP::isEmitted(const DeltaPointToGraph &d, Instruction *i) {
     }
   }
   return false;
+}
+
+void LocalFCP::countStats() {
+  numInstDUG = numFakePhiDUG = numEdges = 0;
+  for(auto node : DUGNodes) {
+    if(node->getType()->isVoidTy() && dyn_cast<PHINode>(node)) {
+      numFakePhiDUG += 1;
+    } else {
+      numInstDUG += 1;
+    }
+  }
+
+  for(auto kv : defuseEdges) {
+    numEdges += kv.second.size();
+  }
+  errs() << "Stats: \n";
+  errs() << "Number of fake PHINodes: " << numFakePhiDUG << "\n";
+
+  errs() << "\tNumber of ArgVal fake PHI: " << numArgValFakePhi << "\n";
+  errs() << "\tNumber of ArgMem fake PHI: " << numArgMemFakePhi << "\n";
+  errs() << "\tNumber of MemSSA fake PHI: " << numSSAFakePhi << "\n";
+  errs() << "\tNumber of Callsite fake PHI: " << numCallRetFakePhi << "\n";
+
+  errs() << "Number of instruction DUGNodes: " << numInstDUG << "\n";
+  int numNodes = numInstDUG + numFakePhiDUG;
+  errs() << "Number of DUGNodes in total: |V| = " << numNodes << "\n";
+  errs() << "Number of DUGEdges: " << numEdges
+         << string_format(" ( = |V|^%.3f )\n", log(numEdges)/log(numNodes) );
+  errs() << "Number of messages passed in iterations:" << numMsgPassed
+         << string_format(" ( = |V|^%.3f )\n", log(numMsgPassed)/log(numNodes) );
 }
 
 // ----------------------------------------------------------------------------
@@ -648,20 +736,17 @@ Value* LocalFCP::getMemObjectsForVal(Value *x) {
     if(DUGNodes.count(inst) > 0) {
       return dataIn[inst].valPointTo;
     }
-  }
-  errs() << "Unknown Value type: " << *x << "\n";
-  return nullptr;
-}
-
-bool LocalFCP::hasMemObjectsForVal(Value *x) {
-  if(resources.count(x) > 0) {
-    return true;
-  } else if(auto inst = dyn_cast<Instruction>(x)) {
-    if(DUGNodes.count(inst) > 0) {
-      return dataIn[inst].valPointTo != nullptr;
+  } else if(auto cexpr = dyn_cast<ConstantExpr>(x)) {
+    if(cexpr->isGEPWithNoNotionalOverIndexing()) {
+      assert(cexpr->getOperand(0)->getType()->isPointerTy()
+             && "In LLVM 3.7 the second operand is the pointer");
+      return getMemObjectsForVal(cexpr->getOperand(0));
+    } else if(cexpr->isCast()) {
+      assert(cexpr->getNumOperands() == 1);
+      return getMemObjectsForVal(cexpr->getOperand(0));
     }
   }
-  return false;
+  return nullptr;
 }
 
 std::unordered_set<Value*> LocalFCP::getPointToSetForVal(Value *x) {
@@ -678,13 +763,14 @@ std::unordered_set<Value*> LocalFCP::getPointToSetForVal(Value *x) {
 
 
 void PointToGraph::mergeUnnamedRec(Value *x) {
-  if(eqClass.getRank(x) == 0) {
-    eqClass.rank[eqClass.find(x)] = 1;
-  }
-  Value *to = getPointTo(x);
-  if(to != nullptr) {
-    mergeUnnamedRec(to);
-  }
+  std::unordered_set<Value*> visited;
+  do {
+    if(eqClass.getRank(x) == 0) {
+      eqClass.rank[eqClass.find(x)] = 1;
+    }
+    visited.insert(x);
+    x = getPointTo(x);
+  } while(x != nullptr && visited.count(x) == 0);
 }
 
 bool PointToGraph::mergeRec(Value *x, Value *y) {
