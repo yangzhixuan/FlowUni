@@ -23,15 +23,55 @@
 
 namespace llvm {
 
+
   // Tarjan's amortized O(alpha(n)) disjoint-set implementation.
   template<typename T, template<typename ...> class M = std::map>
   struct UnionFind {
     M<T,T> leader;
     M<T, int> rank;
-    T find(T);
-    bool merge(T, T); // Return true if this requested merging is activated.
-    int getRank(T);
-    bool equivalent(T, T);
+    T find(T x) {
+      if(leader.count(x) == 0 || leader[x] == x) {
+        return x;
+      } else {
+        T fx = find(leader[x]);
+        leader[x] = fx;
+        return fx;
+      }
+    }
+
+    // Return true if this requested merging is activated.
+    bool merge(T x, T y) {
+      T fx = find(x);
+      T fy = find(y);
+      if(fx != fy) {
+        int rx = getRank(fx);
+        int ry = getRank(fy);
+        if(rx < ry) {
+          leader[fx] = fy;
+        } else if(rx > ry) {
+          leader[fy] = fx;
+        } else {
+          leader[fx] = fy;
+          rank[fy] = ry + 1;
+        }
+        return true;
+      } else {
+        return false;
+      }
+    }
+
+    int getRank(T x) {
+      T fx = find(x);
+      if(rank.count(fx) == 0) {
+        return 0;
+      } else {
+        return rank[fx];
+      }
+    }
+
+    bool equivalent(T x, T y) {
+      return find(x) == find(y);
+    }
   };
 
   struct PointToGraph {
@@ -64,6 +104,7 @@ namespace llvm {
     static char* const externalPlaceholderTop;
     static char* externalPlaceholderCurrent;
     static Value* getFreshExternalPlaceholder();
+    static bool isFakeValue(Value* v);
 
     // Output an Value. Escape for pesudo Value like 'unspecificSpace'.
     static std::string escape(Value* v);
@@ -144,6 +185,7 @@ namespace llvm {
 
     int numEdges;
     int numMsgPassed;
+    int numMsgPassedForGlobals;
     void countStats();
   private:
     std::unordered_map<Value*, Instruction*> argSetInst;
@@ -192,6 +234,8 @@ namespace llvm {
     Value *getImplicitArgOf(Value *x);
 
     // Generate summary at returning points.
+    // TODO: 1. normalize equivalence relation for efficient merging.
+    //       2. filter out unreachable equivalent classes.
     void generateSummary();
   };
 

@@ -13,7 +13,6 @@
 
 using namespace llvm;
 
-
 namespace{
   static RegisterPass<LocalFCPWrapper> X("flowuni-local", "Flow-sensitive unification based points-to analysis", true, true);
 
@@ -26,7 +25,6 @@ namespace{
     return std::string( buf.get(), buf.get() + size - 1 ); // We don't want the '\0' inside
   }
 }
-
 
 char LocalFCPWrapper::ID = 0;
 
@@ -73,7 +71,7 @@ void LocalFCP::clear() {
   fakePhiSource.clear();
   incomingOfArgOrRet.clear();
 
-  numEdges = numInstDUG = numFakePhiDUG = numMsgPassed = 0;
+  numEdges = numInstDUG = numFakePhiDUG = numMsgPassed = numMsgPassedForGlobals = 0;
   numArgValFakePhi = numSSAFakePhi = numArgMemFakePhi = numCallRetFakePhi = 0;
 }
 
@@ -122,7 +120,7 @@ void LocalFCP::identifyDUGNodes(Function &F, LocalMemSSA* memSSA) {
     } else if(I->getType()->isPointerTy()) {
       DUGNodes.insert(&*I);
       nodeSSA[&*I] = memSSA;
-    } else {
+    } else if(dyn_cast<CmpInst>(&*I) == nullptr) {
       for (auto op = I->value_op_begin(); op != I->value_op_end(); op++) {
         if(op->getType()->isPointerTy()) {
           DUGNodes.insert(&*I);
@@ -165,7 +163,7 @@ void LocalFCP::identifyDUGNodes(Function &F, LocalMemSSA* memSSA) {
     fakePhiSource[kv.second] = kv.first;
   }
 
-  for(const auto& kv : memSSA->callRetArgsMergePoints) {
+  for(const auto& kv : memSSA->callRetMemMergePoints) {
     for(const auto& np : kv.second) {
       DUGNodes.insert(np.second);
       nodeSSA[np.second] = memSSA;
@@ -295,7 +293,6 @@ void LocalFCP::simplifyDUG() {
       removeable += 1;
     } else if(defuseEdges[inst].size() == 1 && usedefEdges[inst].size() == 1 && dyn_cast<PHINode>(inst)){
       removeable += 1;
-
     }
   }
   errs() << "Num of removable nodes: " << removeable << "\n";
@@ -327,6 +324,9 @@ void LocalFCP::chaosIterating() {
 
       for(const auto& delta: dataOutDelta[def]) {
         numMsgPassed += 1;
+        if(fakePhiSource.count(inst) && fakePhiSource[inst] == LocalMemSSA::GlobalsLeader) {
+          numMsgPassedForGlobals += 1;
+        }
         if(delta.type == DeltaPointToGraph::Type::Merge) {
           bool activated = in.mergeRec(delta.x, delta.y);
           if(activated) {
@@ -376,6 +376,24 @@ void LocalFCP::chaosIterating() {
         outDelta.clear();
 
         if(ptrTo == nullptr) {
+          if(externalResources.count(ptrMem) == 0) {
+            errs() << *inst << "\n";
+            errs() << ptrMem << "\n";
+            errs() << *ptrMem << "\n";
+            errs() << "dyn_cast: " << dyn_cast<GlobalVariable>(ptrMem) << "\n";
+
+            errs() << "Predecessors: \n";
+            for(auto pred : usedefEdges[inst]) {
+              errs() << *pred << "\n";
+            }
+            errs() << "\n";
+
+            errs() << "MemSSA Predecessors: \n";
+            for(auto pred : nodeSSA[inst]->memSSADefs[inst]) {
+              errs() << *pred << ", " << "in DUG: " << DUGNodes.count(pred) << ", Cmp =? " << dyn_cast<CmpInst>(pred)<< "\n";
+            }
+            errs() << "\n";
+          }
           assert(externalResources.count(ptrMem) > 0 && "Non-external memory objects should always points to something");
 
           ptrTo = getImplicitArgOf(ptrMem);
@@ -500,7 +518,10 @@ void LocalFCP::chaosIterating() {
             in.valPointTo = ptrMem;
             valPtrChanged = true;
           } else {
-            outDelta.push_back(make_merge(in.valPointTo, ptrMem));
+            bool activated = in.mergeRec(in.valPointTo, ptrMem);
+            if(activated) {
+              inDelta.push_back(make_merge(in.valPointTo, ptrMem));
+            }
           }
         }
       } else {
@@ -534,7 +555,7 @@ void LocalFCP::chaosIterating() {
         in.valPointTo = retMem;
       }
     } else if (auto call = dyn_cast<CallInst>(inst)) {
-      // Merge returned value
+      // For intra-SCC calls, merge returned value.
       if(incomingOfArgOrRet.count(call) > 0) {
         for(auto ptr : incomingOfArgOrRet[call]) {
           auto ptrMem = getMemObjectsForVal(ptr);
@@ -551,6 +572,7 @@ void LocalFCP::chaosIterating() {
       }
     } else {
       // TODO: other instructions
+      errs() << "Unknown instruction type: " << *inst << "\n";
     }
 
     if(outDelta.size() > 0 || valPtrChanged) {
@@ -634,58 +656,10 @@ void LocalFCP::countStats() {
          << string_format(" ( = |V|^%.3f )\n", log(numEdges)/log(numNodes) );
   errs() << "Number of messages passed in iterations:" << numMsgPassed
          << string_format(" ( = |V|^%.3f )\n", log(numMsgPassed)/log(numNodes) );
+  errs() << "Number of messages passed for globals: " << numMsgPassedForGlobals
+         << string_format(" ( %.2f%% of total )\n", (double)(numMsgPassedForGlobals) / numMsgPassed * 100);
 }
 
-// ----------------------------------------------------------------------------
-// Tarjan's amortized O(alpha(n)) disjoint-set implementation.
-// ----------------------------------------------------------------------------
-
-template<typename T, template<typename ...> class M>
-T UnionFind<T, M>::find(T x) {
-  if(leader.count(x) == 0 || leader[x] == x) {
-    return x;
-  } else {
-    T fx = find(leader[x]);
-    leader[x] = fx;
-    return fx;
-  }
-}
-
-template<typename T, template<typename ...> class M>
-bool UnionFind<T, M>::merge(T x, T y) {
-  T fx = find(x);
-  T fy = find(y);
-  if(fx != fy) {
-    int rx = getRank(fx);
-    int ry = getRank(fy);
-    if(rx < ry) {
-      leader[fx] = fy;
-    } else if(rx > ry) {
-      leader[fy] = fx;
-    } else {
-      leader[fx] = fy;
-      rank[fy] = ry + 1;
-    }
-    return true;
-  } else {
-    return false;
-  }
-}
-
-template<typename T, template<typename ...> class M>
-int UnionFind<T, M>::getRank(T x) {
-  T fx = find(x);
-  if(rank.count(fx) == 0) {
-    return 0;
-  } else {
-    return rank[fx];
-  }
-}
-
-template<typename T, template<typename ...> class M>
-bool UnionFind<T, M>::equivalent(T x, T y) {
-  return find(x) == find(y);
-}
 
 PointToGraph::PointToGraph() {
   valPointTo = nullptr;
@@ -718,6 +692,12 @@ Value* PointToGraph::getFreshExternalPlaceholder() {
   }
   return ret;
 }
+
+bool PointToGraph::isFakeValue(Value *v) {
+  char *addr = (char*) v;
+  return addr >= externalPlaceholderBase && addr < externalPlaceholderTop;
+}
+
 
 DeltaPointToGraph::DeltaPointToGraph(DeltaPointToGraph::Type type, Value *x, Value *y) : type(type), x(x), y(y) { }
 
@@ -805,7 +785,7 @@ std::string PointToGraph::escape(Value* v) {
     rso << "<nullptr>";
   } else if(v == unspecificSpace) {
     rso << "<unspecific space>";
-  } else if((char*)v >= externalPlaceholderBase && (char*)v < externalPlaceholderTop) {
+  } else if(PointToGraph::isFakeValue(v)) {
     rso << "<external " << ((char*)v - (char*)externalPlaceholderBase) << ">";
   } else {
     v->print(rso);
@@ -825,8 +805,8 @@ void LocalFCP::initWorkListDomOrder(LocalMemSSA *memSSA, BasicBlock *bb, std::un
   for(auto& I : *bb) {
     Instruction *inst = &I;
     if(auto call = dyn_cast<CallInst>(inst)) {
-      if(memSSA->callRetArgsMergePoints.count(call) > 0) {
-        for(const auto& np : memSSA->callRetArgsMergePoints[call]) {
+      if(memSSA->callRetMemMergePoints.count(call) > 0) {
+        for(const auto& np : memSSA->callRetMemMergePoints[call]) {
           worklist.push(np.second);
           inList.insert(np.second);
         }

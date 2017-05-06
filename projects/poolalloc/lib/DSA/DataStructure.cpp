@@ -654,7 +654,6 @@ void DSNode::MergeNodes(DSNodeHandle& CurNodeH, DSNodeHandle& NH) {
   N->Globals.clear();
 }
 
-
 /// mergeWith - Merge this node and the specified node, moving all links to and
 /// from the argument node into the current node, deleting the node argument.
 /// Offset indicates what offset the specified node is to be merged into the

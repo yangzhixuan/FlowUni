@@ -27,6 +27,22 @@ namespace {
     return std::string( buf.get(), buf.get() + size - 1 ); // We don't want the '\0' inside
   }
 
+  void replaceAll(std::string& str, const std::string& from, const std::string& to) {
+    if(from.empty())
+      return;
+    size_t start_pos = 0;
+    while((start_pos = str.find(from, start_pos)) != std::string::npos) {
+      str.replace(start_pos, from.length(), to);
+      start_pos += to.length(); // In case 'to' contains 'from', like replacing 'x' with 'yx'
+    }
+  }
+
+  std::string escapeString(std::string x) {
+    replaceAll(x, "\n", "\\n");
+    return x;
+  }
+
+
   std::string trim(std::string s) {
     if (s.empty()) {
       return s;
@@ -172,7 +188,7 @@ void LocalMemSSA::dump(){
 
   // Output all DSNode* as nodes
   for(auto n : memObjects) {
-    of << indent << string_format("%s[label=\"%s\"];\n", nodeName(n).c_str(), trim(n->getCaption()).c_str());
+     of << indent << string_format("%s[label=\"%s\"];\n", nodeName(n).c_str(), escapeString(trim(n->getCaption())).c_str());
   }
 
   // All DSNodes form a subgraph
@@ -247,7 +263,7 @@ void LocalMemSSA::dump(){
   }
 
   of << indent << "//Bar\n";
-  for(auto& kv : callRetArgsMergePoints) {
+  for(auto& kv : callRetMemMergePoints) {
     for(auto& np : kv.second) {
       if(np.first == GlobalsLeader) {
         for(auto n : globals) {
@@ -287,7 +303,7 @@ void LocalFCP::dump(std::string fileName) {
       if(fakePhiSource[inst] == LocalMemSSA::GlobalsLeader) {
         label = label + "(for globals)";
       } else {
-        label = label + "\\n(for " + trim(fakePhiSource[inst]->getCaption()) + ")";
+        label = label + "\\n(for " + escapeString(trim(fakePhiSource[inst]->getCaption())) + ")";
       }
     }
     of << indent << string_format("%s[label=\"%s\"];\n", nodeName(inst).c_str(), label.c_str());

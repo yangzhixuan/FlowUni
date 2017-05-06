@@ -93,7 +93,7 @@ void LocalMemSSA::clear() {
   arguments.clear();
   globals.clear();
   argIncomingMergePoint.clear();
-  callRetArgsMergePoints.clear();
+  callRetMemMergePoints.clear();
   callArgLastDef.clear();
   returnedMem.clear();
   retMemLastDef.clear();
@@ -291,7 +291,7 @@ bool LocalMemSSA::runOnFunction(Function &F) {
   // Create merge points for returning from function calls.
   for(auto inst_ite = inst_begin(F); inst_ite != inst_end(F); inst_ite++) {
     if(auto call = dyn_cast<CallInst>(&*inst_ite)) {
-      auto& retMergePoint = callRetArgsMergePoints[call];
+      auto& retMergePoint = callRetMemMergePoints[call];
       for(DSNode *n : memModifiedByCall[call]) {
         retMergePoint[n] = PHINode::Create( Type::getVoidTy(F.getContext()), 0, "");
       }
@@ -379,7 +379,7 @@ void LocalMemSSA::buildSSARenaming(std::map<DSNode *, std::vector<Instruction *>
     } else if(auto call = dyn_cast<CallInst>(&*inst_ite)) {
       if(memModifiedByCall.count(call) > 0) {
         auto& argLastDef = callArgLastDef[call];
-        auto& argRetMerge = callRetArgsMergePoints[call];
+        auto& argRetMerge = callRetMemMergePoints[call];
 
         for(DSNode *n : memModifiedByCall[call]) {
           assert(argRetMerge.count(n) > 0);
@@ -486,7 +486,7 @@ void LocalMemSSA::hidePhiNodes() {
     kv.second->removeFromParent();
   }
 
-  for(auto& kv : callRetArgsMergePoints) {
+  for(auto& kv : callRetMemMergePoints) {
     for(auto& np : kv.second) {
       np.second->removeFromParent();
     }
@@ -504,7 +504,7 @@ void LocalMemSSA::showPhiNodes() {
     func->getEntryBlock().getInstList().insert(func->getEntryBlock().getFirstInsertionPt(), kv.second);
   }
 
-  for(auto& kv : callRetArgsMergePoints) {
+  for(auto& kv : callRetMemMergePoints) {
     for(auto& np : kv.second) {
       np.second->insertBefore(kv.first);
     }
