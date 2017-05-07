@@ -77,6 +77,7 @@ namespace llvm {
     void clonePointToGraphInto(PointToGraph &dest, PointToGraph &src, std::unordered_map<Value *, Value *> &cloned,
                                    std::vector<DeltaPointToGraph> &destDelta);
 
+    Value* cloneValue(Value *k, std::unordered_map<Value *, Value *> &cloned);
   };
 }
 

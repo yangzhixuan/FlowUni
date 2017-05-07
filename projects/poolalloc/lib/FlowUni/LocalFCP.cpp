@@ -105,27 +105,84 @@ bool LocalFCP::runOnFunction(Function &F, LocalMemSSA *memSSA) {
   return false;
 }
 
+void LocalFCP::identifyResources(Function& F) {
+
+  // Identify all resources (alloc / pointer args / globals) to be analyzed in the local phase.
+  for(inst_iterator I = inst_begin(F); I != inst_end(F); I++) {
+
+    if(dyn_cast<AllocaInst>(&*I)) {
+      resources.insert(&*I);
+    }
+
+    for(auto op = I->value_op_begin(); op != I->value_op_end(); op++) {
+      Value *op_reduced = *op;
+
+      // Reduce ConstantExpr to the underlying pointer.
+      while(auto cexpr = dyn_cast<ConstantExpr>(op_reduced)) {
+        if(cexpr->isGEPWithNoNotionalOverIndexing()) {
+          assert(cexpr->getOperand(0)->getType()->isPointerTy()
+                 && "In LLVM 3.7 the second operand is the pointer");
+          op_reduced = cexpr->getOperand(0);
+        } else if(cexpr->isCast()) {
+          assert(cexpr->getNumOperands() == 1);
+          op_reduced = cexpr->getOperand(0);
+        } else {
+          errs() << "Unrecognized ConstantExpr: " << *op_reduced << "\n";
+          break;
+        }
+      }
+
+      if(dyn_cast<GlobalVariable>(op_reduced)) {
+        resources.insert(op_reduced);
+        externalResources.insert(op_reduced);
+      }
+    }
+  }
+
+  for(auto arg_ite = F.arg_begin(); arg_ite != F.arg_end(); arg_ite++) {
+    if(arg_ite->getType()->isPointerTy()) {
+      resources.insert(&*arg_ite);
+      externalResources.insert(&*arg_ite);
+    }
+  }
+}
+
 void LocalFCP::identifyDUGNodes(Function &F, LocalMemSSA* memSSA) {
-  // An instruction is considered interesting if it returns an 'interesting' pointer-pointer
-  // or it uses an 'interesting' pointer-pointer.
+  // An instruction is considered in our data-flow analysis if it returns or uses a pointer.
+  // (Exception: 1. ReturnInsts are always considered.
+  //             2. CallInsts are always considered
+  //             3. Store/Load-Insts of non-pointer Values are not considered
+  //             4. CmpInsts are always not considered
   for(inst_iterator I = inst_begin(F); I != inst_end(F); I++) {
     if(resources.count(&*I)) {
       DUGNodes.insert(&*I);
       //   Remembering the 'memSSA' pointer should be safe if 'memSSA' is a pointer to a element
       //   of a unordered_map container (of 'LocalMemSSAWrapper')
       nodeSSA[&*I] = memSSA;
-    } else if(dyn_cast<ReturnInst>(&*I)) {
+    } else if(dyn_cast<ReturnInst>(&*I) || dyn_cast<CallInst>(&*I)) {
       DUGNodes.insert(&*I);
       nodeSSA[&*I] = memSSA;
     } else if(I->getType()->isPointerTy()) {
       DUGNodes.insert(&*I);
       nodeSSA[&*I] = memSSA;
-    } else if(dyn_cast<CmpInst>(&*I) == nullptr) {
-      for (auto op = I->value_op_begin(); op != I->value_op_end(); op++) {
-        if(op->getType()->isPointerTy()) {
+    } else {
+      if(auto store = dyn_cast<StoreInst>(&*I)) {
+        if(store->getValueOperand()->getType()->isPointerTy()) {
           DUGNodes.insert(&*I);
           nodeSSA[&*I] = memSSA;
-          break;
+        }
+      } else if(auto load = dyn_cast<LoadInst>(&*I)) {
+        if(load->getType()->isPointerTy()) {
+          DUGNodes.insert(&*I);
+          nodeSSA[&*I] = memSSA;
+        }
+      } else if(dyn_cast<CmpInst>(&*I) == nullptr) {
+        for (auto op = I->value_op_begin(); op != I->value_op_end(); op++) {
+          if(op->getType()->isPointerTy()) {
+            DUGNodes.insert(&*I);
+            nodeSSA[&*I] = memSSA;
+            break;
+          }
         }
       }
     }
@@ -175,25 +232,6 @@ void LocalFCP::identifyDUGNodes(Function &F, LocalMemSSA* memSSA) {
 
 
 void LocalFCP::identifyDUGEdges() {
-  // We don't care about storing/loading a non-pointer value. Remove these instructions.
-  for(auto ite = DUGNodes.begin(); ite != DUGNodes.end(); ) {
-    bool removed = false;
-    if(auto store = dyn_cast<StoreInst>(*ite)) {
-      if(store->getValueOperand()->getType()->isPointerTy() == false) {
-        ite = DUGNodes.erase(ite);
-        removed = true;
-      }
-    } else if(auto load = dyn_cast<LoadInst>(*ite)) {
-      if(load->getType()->isPointerTy() == false) {
-        ite = DUGNodes.erase(ite);
-        removed = true;
-      }
-    }
-    if(!removed) {
-      ++ite;
-    }
-  }
-
   // Edges between DUGNodes consist of original def-use edges in the LLVM IR and
   // def-use edges in the Memory SSA.
   for(auto inst : DUGNodes) {
@@ -240,26 +278,6 @@ void LocalFCP::identifyDUGEdges() {
 #endif
 }
 
-void LocalFCP::identifyResources(Function& F) {
-  // Identify all resources (alloc / pointer args / globals) to be analyzed in the local phase.
-  for(inst_iterator I = inst_begin(F); I != inst_end(F); I++) {
-    if(dyn_cast<AllocaInst>(&*I)) {
-      resources.insert(&*I);
-    }
-    for(auto op = I->value_op_begin(); op != I->value_op_end(); op++) {
-      if(dyn_cast<GlobalVariable>(*op)) {
-        resources.insert(*op);
-        externalResources.insert(*op);
-      }
-    }
-  }
-  for(auto arg_ite = F.arg_begin(); arg_ite != F.arg_end(); arg_ite++) {
-    if(arg_ite->getType()->isPointerTy()) {
-      resources.insert(&*arg_ite);
-      externalResources.insert(&*arg_ite);
-    }
-  }
-}
 
 void LocalFCP::initWorkListDomOrder(Function &F, LocalMemSSA* memSSA) {
   // Push all DUGNodes to the worklist in an order consistent with the dominance order.
@@ -306,6 +324,7 @@ void LocalFCP::chaosIterating() {
     inList.erase(inst);
 
     assert(DUGNodes.count(inst) > 0);
+    // errs() << "chaos-iteration on " << *inst << "\n";
 
     // The input data-flow data.
     auto& in = dataIn[inst];
@@ -318,13 +337,13 @@ void LocalFCP::chaosIterating() {
     for(auto def: usedefEdges[inst]) {
       if(dyn_cast<AllocaInst>(def) && nodeSSA[inst]->memSSADefs[inst].count(def) == 0 ) {
         // If it is only a value reference to an AllocInst, don't apply Alloca's modification to memory.
-        // (It should be done in a more elegant way).
+        // FIXME: do this in a more elegant way.
         continue;
       }
 
       for(const auto& delta: dataOutDelta[def]) {
         numMsgPassed += 1;
-        if(fakePhiSource.count(inst) && fakePhiSource[inst] == LocalMemSSA::GlobalsLeader) {
+        if(fakePhiSource.count(inst) > 0 && fakePhiSource[inst] == LocalMemSSA::GlobalsLeader) {
           numMsgPassedForGlobals += 1;
         }
         if(delta.type == DeltaPointToGraph::Type::Merge) {
@@ -372,37 +391,19 @@ void LocalFCP::chaosIterating() {
       auto ptrMem = getMemObjectsForVal(ptr);   // resource equivalent class pointed by 'ptr'
       auto ptrTo = in.getPointTo(ptrMem);
 
+      outDelta.clear();
       if(ptrMem != nullptr) {
-        outDelta.clear();
 
         if(ptrTo == nullptr) {
-          if(externalResources.count(ptrMem) == 0) {
-            errs() << *inst << "\n";
-            errs() << ptrMem << "\n";
-            errs() << *ptrMem << "\n";
-            errs() << "dyn_cast: " << dyn_cast<GlobalVariable>(ptrMem) << "\n";
-
-            errs() << "Predecessors: \n";
-            for(auto pred : usedefEdges[inst]) {
-              errs() << *pred << "\n";
-            }
-            errs() << "\n";
-
-            errs() << "MemSSA Predecessors: \n";
-            for(auto pred : nodeSSA[inst]->memSSADefs[inst]) {
-              errs() << *pred << ", " << "in DUG: " << DUGNodes.count(pred) << ", Cmp =? " << dyn_cast<CmpInst>(pred)<< "\n";
-            }
-            errs() << "\n";
-          }
           assert(externalResources.count(ptrMem) > 0 && "Non-external memory objects should always points to something");
 
           ptrTo = getImplicitArgOf(ptrMem);
+
 #ifdef __DBGFCP
           errs() << "get implicit argument at " << *inst << ", for " << PointToGraph::escape(ptrMem) << ", result: " << PointToGraph::escape(ptrTo) << "\n";
 #endif
 
           in.setPointTo(ptrMem, ptrTo);
-          outDelta.push_back(make_pointTo(ptrMem, ptrTo));
           resources.insert(ptrTo);
         }
 
@@ -471,7 +472,10 @@ void LocalFCP::chaosIterating() {
           if(!isEmitted(delta, inst)) {
             outDelta.push_back(delta);
             outInDiff.push_back(delta);
-            // errs() << "strong update for: " << *ptrMem << ", at " << *inst << ", " << escape(ptrMem) << " to " << escape(contentMem) << "\n";
+
+#ifdef __DBGFCP
+            errs() << "strong update for: " << PointToGraph::escape(ptrMem) << ", at " << *inst << ", " << " to " << PointToGraph::escape(contentMem) << "\n";
+#endif
           }
         } else {
           // ptrMem is not a unique memory resource. Perform weak update.
@@ -695,7 +699,7 @@ Value* PointToGraph::getFreshExternalPlaceholder() {
 
 bool PointToGraph::isFakeValue(Value *v) {
   char *addr = (char*) v;
-  return addr >= externalPlaceholderBase && addr < externalPlaceholderTop;
+  return (addr >= externalPlaceholderBase && addr < externalPlaceholderTop);
 }
 
 

@@ -33,10 +33,12 @@ void BuFCP::getAnalysisUsage(AnalysisUsage &AU) const {
 void BuFCP::clear() {
   funcSccNum.clear();
   sccMember.clear();
-  sccCount = 1;  // SCC #0 is left as empty for debugging.
   sccFCP.clear();
   retInstOfFunc.clear();
   fakeValueToReal.clear();
+  sccCount = 1;  // SCC #0 is left as empty for debugging.
+  sccFCP.push_back(LocalFCP());
+  sccMember.push_back(std::unordered_set<Function*>());
 }
 
 bool BuFCP::runOnModule(Module &M) {
@@ -62,7 +64,7 @@ bool BuFCP::runOnModule(Module &M) {
       funcSccNum[const_cast<Function*>(kv.first)] = sccCount;   // I promise not to modify it!
       sccMember[sccCount].insert(const_cast<Function*>(kv.first));
 
-      assert(buDSA->getDSGraph(*kv.first) == dsg && "Assumption 'SCC members share a DSGraph' is wrong");
+      assert(buDSA->getDSGraph(*kv.first) == dsg && "Assumption 'SCC members share the same DSGraph' is wrong");
     }
     errs() << "\n";
     sccCount += 1;
@@ -83,33 +85,37 @@ bool BuFCP::runOnModule(Module &M) {
 
     sccFCP.push_back(LocalFCP());
     LocalFCP &fcp = sccFCP[i];
-    auto &scc = sccMember[i];
+    auto &members = sccMember[i];
 
     errs() << "Member: ";
-    for(auto f : scc) {
+    for(auto f : members) {
       errs() << f->getName() << ", ";
     }
     errs() << "\n";
 
     fcp.clear();
-    for(auto f : scc) {
+    for(auto f : members) {
       fcp.identifyResources(*f);
       fcp.identifyDUGNodes(*f, &memSSA->ssa[f]);
     }
     fcp.identifyDUGEdges();
     resolveSccCallsArgCopy(i, fcp);
     fcp.simplifyDUG();
-    for(auto f : scc) {
+    for(auto f : members) {
       fcp.initWorkListDomOrder(*f, &memSSA->ssa[f]);
     }
     fcp.chaosIterating();
     fcp.computeDataOut();
     fcp.generateSummary();
 
-    fcp.checkAssertions();
-    fcp.dump("SccFCP." + (*(scc.begin()))->getName().str());
+    // fcp.checkAssertions();
+    if(members.size() > 0) {
+      fcp.dump("SccFCP." + (*(members.begin()))->getName().str());
+    }
     fcp.countStats();
   }
+
+  errs() << "\n\nBU-stage: \n";
 
   // Step4. Post-order inline function summary.
   visited = std::vector<bool>(sccCount, false);
@@ -117,6 +123,18 @@ bool BuFCP::runOnModule(Module &M) {
     if(!visited[i]) {
       postOrderInline(i);
     }
+  }
+
+  for(int i = 0; i < sccCount; i++) {
+    errs() << "\nSCC " << i << "\n";
+    errs() << "Member: ";
+    for(auto f : sccMember[i]) {
+      errs() << f->getName() << ", ";
+    }
+    errs() << "\n";
+
+    sccFCP[i].checkAssertions();
+    sccFCP[i].countStats();
   }
   return false;
 }
@@ -127,16 +145,15 @@ void BuFCP::resolveInSccCalls(Function* f) {
       if(Function *callee = call->getCalledFunction()) {
         if(funcSccNum.count(callee) > 0 && funcSccNum[callee] == funcSccNum[f]) {
           // Direct call to another function in the same SCC. Splice their memSSA together.
+          assert(buDSA->hasDSGraph(*f));
           DSGraph *dsg = buDSA->getDSGraph(*f);
           assert(dsg == buDSA->getDSGraph(*callee) && "Functions in the same SCC should have the same DSGraph");
 
           LocalMemSSA& callerSSA = memSSA->ssa[f];
           LocalMemSSA& calleeSSA = memSSA->ssa[callee];
 
-          // Look up a const pointer should be safe. Take care not to store the casted pointer in memSSA.
-          CallInst *call_mut = const_cast<CallInst*>(call);
-          if(callerSSA.callArgLastDef.count(call_mut) > 0) {
-            auto& actuals = callerSSA.callArgLastDef[call_mut];
+          if(callerSSA.callArgLastDef.count(call) > 0) {
+            auto& actuals = callerSSA.callArgLastDef[call];
             auto& formals = calleeSSA.argIncomingMergePoint;
 
             // Connects actual arguments ('lastDef') and formal arguments ('argIncomingMergePoint').
@@ -149,7 +166,7 @@ void BuFCP::resolveInSccCalls(Function* f) {
             }
 
             // Connects from callee back to the caller.
-            auto& callsiteRet = callerSSA.callRetMemMergePoints[call_mut];
+            auto& callsiteRet = callerSSA.callRetMemMergePoints[call];
             auto& output = calleeSSA.retMemLastDef;
             for(const auto& n_i : callsiteRet) {
               DSNode *n = n_i.first;
@@ -267,6 +284,39 @@ void BuFCP::postOrderInline(int scc) {
   //   0. calls to a function who has a summary
   //   1. calls to an external function (function declaration)
 
+
+  // Process calls to external function (function declaration) first.
+  // The strategy is simple: treating these calls return an external resource.
+  for(auto f : members) {
+    for (auto inst_ite = inst_begin(f); inst_ite != inst_end(f); inst_ite++) {
+      if (auto call = dyn_cast<CallInst>(&*inst_ite)) {
+        if (auto callee = call->getCalledFunction()) {
+          if (callee->isDeclaration() && call->getType()->isPointerTy()
+              && myFCP.DUGNodes.count(call) > 0) {
+
+            myFCP.externalResources.insert(call);
+            myFCP.resources.insert(call);
+
+            myFCP.dataIn[call].valPointTo = call;
+            myFCP.dataIn[call].valPointToSets.insert(call);
+
+            for(auto user : myFCP.defuseEdges[call]) {
+              if(myFCP.inList.count(user) == 0) {
+                myFCP.worklist.push(user);
+                myFCP.inList.insert(user);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  if(myFCP.worklist.size() > 0) {
+    myFCP.chaosIterating();
+  }
+
+  // Now process calls to a function with a summary
+
   std::vector<CallInst*> callSitesToProcess;
 
   for(auto f : members) {
@@ -274,7 +324,7 @@ void BuFCP::postOrderInline(int scc) {
       if (auto call = dyn_cast<CallInst>(&*inst_ite)) {
         if (auto callee = call->getCalledFunction()) {
           if (callee->isDeclaration()) {
-            assert(0 && "NOT IMPLEMENTED YET");
+            // assert(0 && "NOT IMPLEMENTED YET");
           } else if (funcSccNum[callee] != scc) {
             assert(funcSccNum.count(callee) > 0 && visited[funcSccNum[callee]]);
             if(myFCP.DUGNodes.count(call) > 0) {
@@ -306,18 +356,30 @@ void BuFCP::postOrderInline(int scc) {
       }
 
       if(argsCalculated) {
+        // errs() << "Inlining at " << *call << " of " << call->getParent()->getParent()->getName() << "\n";
         processedOne = true;
         mergeCallsite(call);
 
         // Re-run chaos-iterating.
         auto& retMemMergePoints = memSSA->ssa[call->getParent()->getParent()].callRetMemMergePoints[call];
         for(const auto& n_phi : retMemMergePoints) {
-          myFCP.worklist.push(n_phi.second);
-          myFCP.inList.insert(n_phi.second);
+          for(const auto& user : myFCP.defuseEdges[n_phi.second]) {
+            if(myFCP.inList.count(user) == 0) {
+              myFCP.worklist.push(user);
+              myFCP.inList.insert(user);
+            }
+          }
         }
-        myFCP.worklist.push(call);
-        myFCP.inList.insert(call);
+        for(const auto& user : myFCP.defuseEdges[call]) {
+          if(myFCP.inList.count(user) == 0) {
+            myFCP.worklist.push(user);
+            myFCP.inList.insert(user);
+          }
+        }
         myFCP.chaosIterating();
+
+        std::swap(callSitesToProcess[i], callSitesToProcess[callSitesToProcess.size() - 1]);
+        callSitesToProcess.pop_back();
       }
     }
 
@@ -325,6 +387,9 @@ void BuFCP::postOrderInline(int scc) {
       assert(false && "All callsites are not processable!");
     }
   }
+
+  myFCP.computeDataOut();
+  myFCP.generateSummary();
 }
 
 void BuFCP::mergeCallsite(CallInst *call) {
@@ -391,8 +456,9 @@ void BuFCP::mergeCallsite(CallInst *call) {
           }
 
           // Merge formal and actual.
-          PHINode *retMergePhi = retMemMergePoints[actNodeH.getNode()];
-          assert(0 && "callsite should create a merge point for 'n' at buildSSARenaming() : MemSSA.cpp");
+          DSNode *actNode = actNodeH.getNode()->isGlobalNode() ? LocalMemSSA::GlobalsLeader : actNodeH.getNode();
+          PHINode *retMergePhi = retMemMergePoints[actNode];
+          assert(retMergePhi && "callsite should create a merge point for 'n' at buildSSARenaming() : MemSSA.cpp");
 
           Value *actMem = myFCP.getMemObjectsForVal(actual);
           Value *fmlMem = cloningMapping[formal];
@@ -430,15 +496,21 @@ void BuFCP::mergeCallsite(CallInst *call) {
 
               auto& callGraph = myFCP.dataIn[call];
 
-              assert(cloningMapping.count(calleeRetGraph.valPointTo) > 0 && "Returned memory should be cloned into the caller");
+              // assert(cloningMapping.count(calleeRetGraph.valPointTo) > 0 && "Returned memory should be cloned into the caller");
               clonePointToGraphInto(callGraph, calleeRetGraph, cloningMapping, myFCP.dataOutDelta[call]);
 
+              Value *returnedPtr = cloneValue(calleeRetGraph.valPointTo, cloningMapping);
+
               if(callGraph.valPointTo == nullptr) {
-                callGraph.valPointTo = cloningMapping[calleeRetGraph.valPointTo];
+                callGraph.valPointTo = returnedPtr;
+                // errs() << "For " << *call << ", retval is " << PointToGraph::escape(returnedPtr) << " cloned From "
+                //        << PointToGraph::escape(calleeRetGraph.valPointTo) << "\n";
               } else {
-                bool activated = callGraph.mergeRec(cloningMapping[calleeRetGraph.valPointTo], callGraph.valPointTo);
+                bool activated = callGraph.mergeRec(returnedPtr, callGraph.valPointTo);
+                errs() << "For " << *call << ", retval merges with " << PointToGraph::escape(returnedPtr) << " cloned From "
+                       << PointToGraph::escape(calleeRetGraph.valPointTo) << "\n";
                 if(activated) {
-                  myFCP.dataOutDelta[call].push_back(make_merge(cloningMapping[calleeRetGraph.valPointTo], callGraph.valPointTo));
+                  myFCP.dataOutDelta[call].push_back(make_merge(returnedPtr, callGraph.valPointTo));
                 }
               }
             }
@@ -468,10 +540,10 @@ void BuFCP::mergePointToGraphByDSNodes(DSNodeHandle nh, DSNodeHandle mh, Functio
   mergedNodes.merge(n, m);
 
   // Find corresponding partial PointToGraphs for 'n' and 'm'
-  PHINode *retMergePhi = memSSA->ssa[caller].callRetMemMergePoints[callsite][n];
+  PHINode *retMergePhi = memSSA->ssa[caller].callRetMemMergePoints[callsite][n->isGlobalNode() ? LocalMemSSA::GlobalsLeader : n];
   assert(retMergePhi && "callsite should create a merge point for 'n' at buildSSARenaming() : MemSSA.cpp");
 
-  Instruction *lastDefInst = memSSA->ssa[callee].retMemLastDef[m];
+  Instruction *lastDefInst = memSSA->ssa[callee].retMemLastDef[m->isGlobalNode() ? LocalMemSSA::GlobalsLeader : m];
   assert(lastDefInst && "callee should record last definition instruction for 'm' at buildSSARenaming() : MemSSA.cpp");
 
   LocalFCP &callerFCP = sccFCP[funcSccNum[caller]];
@@ -511,6 +583,30 @@ void BuFCP::mergePointToGraphByDSNodes(DSNodeHandle nh, DSNodeHandle mh, Functio
   }
 }
 
+Value* BuFCP::cloneValue(Value *k, std::unordered_map<Value *, Value *> &cloned) {
+  if(k == nullptr) {
+    return (Value*)nullptr;
+  } else if(k == PointToGraph::unspecificSpace) {
+    return k;
+  } else if(not PointToGraph::isFakeValue(k) && dyn_cast<GlobalVariable>(k)) {
+    return k;
+  } else {
+    Value *clonedK;
+    if(cloned.count(k) == 0) {
+      clonedK = PointToGraph::getFreshExternalPlaceholder();
+      if(fakeValueToReal.count(k) > 0) {
+        fakeValueToReal[clonedK] = fakeValueToReal[k];
+      } else {
+        fakeValueToReal[clonedK] = k;
+      }
+      cloned[k] = clonedK;
+    } else {
+      clonedK = cloned[k];
+    }
+    return clonedK;
+  }
+}
+
 // Brute-force-ly clone every thing of 'src' into 'dest'.
 // For any Value in 'src', a new 'fake' Value cloning is used in 'dest'.
 // The correspondence between real Value* and fake Value* is recorded in 'fakeValueToReal'.
@@ -519,31 +615,11 @@ void BuFCP::clonePointToGraphInto(PointToGraph &dest, PointToGraph &src,
                                   std::unordered_map<Value *, Value *> &cloned,
                                   std::vector<DeltaPointToGraph> &destDelta) {
 
-  auto cloneValue = [&](Value *k) {
-    if(k == nullptr) {
-      return (Value*)nullptr;
-    } else {
-      Value *clonedK;
-      if(cloned.count(k) == 0) {
-        clonedK = PointToGraph::getFreshExternalPlaceholder();
-        if(fakeValueToReal.count(k) > 0) {
-          fakeValueToReal[clonedK] = fakeValueToReal[k];
-        } else {
-          fakeValueToReal[clonedK] = k;
-        }
-        cloned[k] = clonedK;
-      } else {
-        clonedK = cloned[k];
-      }
-      return clonedK;
-    }
-  };
-
   for(auto kv : src.eqClass.leader) {
     Value *clonedK, *clonedV;
 
-    clonedK = cloneValue(kv.first);
-    clonedV = cloneValue(kv.second);
+    clonedK = cloneValue(kv.first, cloned);
+    clonedV = cloneValue(kv.second, cloned);
 
     if(not dest.eqClass.equivalent(clonedK, clonedV)) {
       bool activated = dest.mergeRec(clonedK, clonedV);
@@ -557,8 +633,8 @@ void BuFCP::clonePointToGraphInto(PointToGraph &dest, PointToGraph &src,
     if(src.eqClass.find(kv.first) == kv.first) {
       Value *clonedK, *clonedV;
 
-      clonedK = cloneValue(kv.first);
-      clonedV = cloneValue(kv.second);
+      clonedK = cloneValue(kv.first, cloned);
+      clonedV = cloneValue(kv.second, cloned);
 
       Value *clonedKTo = dest.getPointTo(clonedK);
 
